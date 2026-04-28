@@ -1,0 +1,76 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+venv/
+env/
+.venv/
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# PyTorch
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+
+# LoRA outputs
+outputs/
+*.pth
+checkpoints/
+
+# Transformers cache
+.cache/
+.hf_cache/
+
+# Logs
+*.log
+logs/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# macOS
+.DS_Store
+
+# Weights & Biases
+wandb/
+*.wandb
+
+# Data
+*.jsonl
+*.csv
+*.parquet
+
+# Env
+.env
+.env.local
+
+# Misc
+*.bak
+*.tmp
