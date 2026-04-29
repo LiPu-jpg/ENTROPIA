@@ -737,16 +737,32 @@ SYNTHETIC_TASKS = [
 TAU_BENCH_TOOLS = {
     "find_user_id_by_email",
     "find_user_id_by_name_zip",
+    "find_user_by_email",
+    "find_user_by_name",
+    "find_user_by_contact",
     "get_user_details",
     "get_order_details",
     "get_product_details",
+    "get_flight_status",
+    "get_reservation_details",
     "list_all_product_types",
     "modify_pending_order_items",
     "modify_pending_order_address",
     "modify_pending_order_payment",
+    "modify_user_address",
     "cancel_pending_order",
+    "cancel_order",
+    "cancel_reservation",
     "return_delivered_order_items",
     "exchange_delivered_order_items",
+    "search_direct_flight",
+    "search_onestop_flight",
+    "book_reservation",
+    "update_reservation_baggages",
+    "update_reservation_flights",
+    "update_reservation_passengers",
+    "send_certificate",
+    "calculate",
     "think",
     "transfer_to_human_agents",
     "respond",
@@ -783,20 +799,28 @@ def load_tau_bench_dataset(
     n_samples: Optional[int] = None,
     split: str = "train",
     seed: int = 42,
+    use_fuvty: bool = False,
+    use_simia: bool = False,
 ) -> TauBenchDataset:
-    """
-    Load synthetic τ-Bench format training data.
-
-    Args:
-        n_samples: Number of samples to load (None = all 25).
-        split: "train" or "eval". Currently both use same pool.
-        seed: Random seed for shuffling.
-
-    Returns:
-        TauBenchDataset instance.
-    """
     rng = random.Random(seed)
-    tasks = list(SYNTHETIC_TASKS)
+
+    if use_simia:
+        try:
+            from data.simia_tasks import SIMIA_TASKS
+            tasks = list(SIMIA_TASKS)
+        except ImportError:
+            print("Warning: simia_tasks.py not found")
+            tasks = list(SYNTHETIC_TASKS)
+    elif use_fuvty:
+        try:
+            from scripts.fuvty_tasks import FUVTY_TASKS
+            tasks = list(FUVTY_TASKS)
+        except ImportError:
+            print("Warning: fuvty_tasks.py not found, falling back to synthetic")
+            tasks = list(SYNTHETIC_TASKS)
+    else:
+        tasks = list(SYNTHETIC_TASKS)
+
     rng.shuffle(tasks)
 
     if split == "train":
@@ -808,3 +832,61 @@ def load_tau_bench_dataset(
         selected = selected[:n_samples]
 
     return TauBenchDataset(selected, split=split)
+
+
+def task_to_sft_string(task: Task) -> str:
+    parts = []
+    for a in task.actions:
+        if a.name in ("respond", "transfer_to_human_agents"):
+            content = a.kwargs.get("content", "")
+            parts.append(f'{a.name}("{content}")')
+        else:
+            args = ", ".join(f'{k}="{v}"' for k, v in a.kwargs.items())
+            parts.append(f"{a.name}({args})")
+    result = " | ".join(parts)
+    if not result.endswith("respond"):
+        if result:
+            result += ' | respond("Done")'
+        else:
+            result = 'respond("Done")'
+    return result
+
+
+class SFTDataset:
+    def __init__(self, tasks: List[Task], tokenizer, max_length: int = 1024):
+        self.inputs = []
+        sys_prompt = (
+            "You are a customer service agent for retail and airline domains. "
+            "Available tools: find_user_id_by_email, find_user_id_by_name_zip, "
+            "get_user_details, get_order_details, get_product_details, get_flight_status, "
+            "get_reservation_details, cancel_pending_order, cancel_reservation, "
+            "return_delivered_order_items, exchange_delivered_order_items, "
+            "modify_pending_order_items, modify_pending_order_address, "
+            "modify_pending_order_payment, search_direct_flight, search_onestop_flight, "
+            "book_reservation, update_reservation_flights, update_reservation_passengers, "
+            "update_reservation_baggages, send_certificate, calculate, "
+            "transfer_to_human_agents, respond. "
+            "Format: tool_name(key='val', ...). Separate multiple calls with ' | '. "
+            "End with respond('summary')."
+        )
+        for task in tasks:
+            prompt = (
+                f"<|im_start|>system\n{sys_prompt}\n<|im_end|>\n"
+                f"<|im_start|>user\n{task.instruction}<|im_end|>\n"
+                f"<|im_start|>assistant\n{task_to_sft_string(task)}<|im_end|>"
+            )
+            encoded = tokenizer(
+                prompt, truncation=True, max_length=max_length,
+                padding="max_length", return_tensors="pt",
+            )
+            self.inputs.append({
+                "input_ids": encoded["input_ids"][0].tolist(),
+                "attention_mask": encoded["attention_mask"][0].tolist(),
+                "labels": encoded["input_ids"][0].tolist(),
+            })
+
+    def __len__(self):
+        return len(self.inputs)
+
+    def __getitem__(self, idx):
+        return self.inputs[idx]

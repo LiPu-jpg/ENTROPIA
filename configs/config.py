@@ -111,7 +111,7 @@ class TrainingConfig:
     eval_interval: int = 50
 
     # Hardware
-    num_gpus: int = 8
+    num_gpus: int = 4
     per_device_train_batch_size: int = 1
 
     # Output

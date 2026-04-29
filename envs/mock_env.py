@@ -39,6 +39,8 @@ def parse_action_from_text(action_text: str) -> Optional[Action]:
     4. Fallback: extract first known tool name from text
     """
     action_text = action_text.strip()
+    if action_text.startswith("(") and action_text.endswith(")"):
+        action_text = action_text[1:-1].strip()
 
     # Strategy 1: JSON object
     if action_text.startswith("{"):
@@ -175,16 +177,32 @@ class MockTauEnv:
     OBSERVATIONS = {
         "find_user_id_by_email": "User found. User ID: user_{user_id}",
         "find_user_id_by_name_zip": "User found. User ID: user_{user_id}",
+        "find_user_by_email": "User found. User ID: user_{user_id}",
+        "find_user_by_name": "User found. User ID: user_{user_id}",
+        "find_user_by_contact": "User found. User ID: user_{user_id}",
         "get_user_details": "User details: name, email, zip code, payment methods on file.",
         "get_order_details": "Order details: items, status, shipping address, payment method.",
         "get_product_details": "Product details: name, price, specifications, availability.",
+        "get_flight_status": "Flight status: on time, departure 14:30, gate B12.",
+        "get_reservation_details": "Reservation details: flight, passengers, baggage, status.",
         "list_all_product_types": "Available product categories: Electronics, Home & Kitchen, Sports, Books, Clothing, Toys.",
         "modify_pending_order_items": "Order items updated successfully.",
         "modify_pending_order_address": "Shipping address updated successfully.",
         "modify_pending_order_payment": "Payment method updated successfully.",
+        "modify_user_address": "User address updated successfully.",
         "cancel_pending_order": "Order cancelled successfully.",
+        "cancel_order": "Order cancelled successfully.",
+        "cancel_reservation": "Reservation cancelled successfully.",
         "return_delivered_order_items": "Return initiated. Refund will be processed within 5-7 business days.",
         "exchange_delivered_order_items": "Exchange initiated. New items will be shipped within 3-5 business days.",
+        "search_direct_flight": "Direct flights found: 3 options available.",
+        "search_onestop_flight": "One-stop flights found: 5 options available.",
+        "book_reservation": "Reservation booked successfully.",
+        "update_reservation_baggages": "Baggage updated successfully.",
+        "update_reservation_flights": "Flight updated successfully.",
+        "update_reservation_passengers": "Passenger info updated successfully.",
+        "send_certificate": "Certificate sent to email.",
+        "calculate": "Calculation completed.",
         "think": "(Internal reasoning recorded)",
         "transfer_to_human_agents": "Transferring to human agent...",
         "respond": "###STOP###",

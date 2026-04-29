@@ -54,7 +54,7 @@ class AdaptiveRewardTrainer:
             lora_config = LoraConfig(
                 r=self.config.lora_r,
                 lora_alpha=self.config.lora_alpha,
-                target_modules=["c_attn", "c_proj"],
+                target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
                 lora_dropout=0.05,
                 bias="none",
                 task_type="CAUSAL_LM",
@@ -81,6 +81,7 @@ class AdaptiveRewardTrainer:
             save_strategy="epoch",
             bf16=self.config.model_dtype == "bfloat16",
             report_to="wandb" if self.config.wandb_project else "none",
+            remove_unused_columns=False,
         )
 
         trainer = Trainer(
@@ -99,94 +100,115 @@ class AdaptiveRewardTrainer:
         max_turns: int = None,
     ) -> Tuple[List[dict], float, List[float], List[float], List[list]]:
         """
-        Execute one rollout: model interacts with mock environment step by step.
+        Plan-then-execute rollout: model generates a full action plan,
+        then we execute it step-by-step in the mock environment.
+        Each action in the plan counts as one step for reward computation.
 
         Returns:
-            trajectory: list of step dicts (for reward computation)
+            trajectory: list of step dicts
             outcome: task reward (0 or 1)
             step_entropies: [T] entropy per step
-            step_token_ids: [T] list of token ID lists (for gradient recomputation)
+            step_token_ids: [T] list of token ID lists
         """
         if max_turns is None:
             max_turns = self.config.max_turns
 
         env = MockTauEnv(task)
-        reset_result = env.reset()
-        observation = reset_result.observation
+        env.reset()
+
+        # Build system prompt matching SFT format
+        sys_prompt = (
+            "You are a customer service agent for retail and airline domains. "
+            "Available tools: find_user_id_by_email, find_user_id_by_name_zip, "
+            "get_user_details, get_order_details, get_product_details, get_flight_status, "
+            "get_reservation_details, cancel_pending_order, cancel_reservation, "
+            "return_delivered_order_items, exchange_delivered_order_items, "
+            "modify_pending_order_items, modify_pending_order_address, "
+            "modify_pending_order_payment, search_direct_flight, search_onestop_flight, "
+            "book_reservation, update_reservation_flights, update_reservation_passengers, "
+            "update_reservation_baggages, send_certificate, calculate, "
+            "transfer_to_human_agents, respond. "
+            "Format: tool_name(key='val', ...). Separate with ' | '. End with respond('summary')."
+        )
+        prompt = (
+            f"<|im_start|>system\n{sys_prompt}\n<|im_end|>\n"
+            f"<|im_start|>user\n{instruction}\n<|im_end|>\n"
+            f"<|im_start|>assistant\n"
+        )
+
+        inputs = self.tokenizer(
+            prompt, return_tensors="pt", truncation=True, max_length=4096
+        ).to(self.device)
+        input_len = inputs.input_ids.shape[1]
+
+        with torch.no_grad():
+            self.model.eval()
+            outputs = self.model.generate(
+                **inputs,
+                    max_new_tokens=512,
+                    do_sample=True,
+                    temperature=0.8,
+                    top_p=0.95,
+                output_scores=True,
+                return_dict_in_generate=True,
+                pad_token_id=self.tokenizer.pad_token_id,
+            )
+            self.model.train()
+
+        generated_ids = outputs.sequences[0][input_len:]
+        plan_text = self.tokenizer.decode(generated_ids, skip_special_tokens=True)
+        if self.global_step == 0:
+            print(f"  [DEBUG] Plan: {plan_text[:300]}", flush=True)
+
+        scores = torch.stack([s.squeeze(0) for s in outputs.scores])
+
+        # Parse actions from plan (split by ' | ')
+        action_strs = [a.strip() for a in plan_text.split("|")]
+        if not action_strs:
+            action_strs = [plan_text]
 
         trajectory = []
         step_entropies = []
         step_token_ids = []
         outcome = 0.0
 
-        for turn in range(max_turns):
-            inputs = self.tokenizer(
-                observation, return_tensors="pt", truncation=True, max_length=4096
-            ).to(self.device)
-            input_len = inputs.input_ids.shape[1]
-
-            with torch.no_grad():
-                self.model.eval()
-                outputs = self.model.generate(
-                    **inputs,
-                    max_new_tokens=256,
-                    do_sample=True,
-                    temperature=0.7,
-                    top_p=0.9,
-                    output_scores=True,
-                    return_dict_in_generate=True,
-                    pad_token_id=self.tokenizer.pad_token_id,
-                )
-                self.model.train()
-
-            generated_ids = outputs.sequences[0][input_len:]
-
-            if len(generated_ids) == 0:
-                trajectory.append(
-                    {
-                        "turn": turn,
-                        "action": "",
-                        "observation": "Empty generation.",
-                        "done": False,
-                    }
-                )
-                step_entropies.append(0.0)
-                step_token_ids.append([])
-                continue
-
-            scores = torch.stack([s.squeeze(0) for s in outputs.scores])
-            H_t, _ = self.entropy_estimator.compute_step_entropy(
-                logits=scores, token_ids=generated_ids
-            )
-            step_entropies.append(H_t.item())
-            step_token_ids.append(generated_ids.tolist())
-
-            action_text = self.tokenizer.decode(generated_ids, skip_special_tokens=True)
-            action = parse_action_from_text(action_text)
+        for turn_idx, action_str in enumerate(action_strs[:max_turns]):
+            action = parse_action_from_text(action_str)
             if action is None:
-                action = Action(name="respond", kwargs={"content": action_text})
+                action = Action(name="respond", kwargs={"content": action_str})
 
             result = env.step(action)
-            trajectory.append(
-                {
-                    "turn": turn,
-                    "action": action_text,
-                    "observation": result.observation,
-                    "done": result.done,
-                }
-            )
-            observation = result.observation
+            trajectory.append({
+                "turn": turn_idx,
+                "action": action_str,
+                "observation": result.observation,
+                "done": result.done,
+            })
+
+            # Distribute entropy and tokens across steps
+            chunk_size = max(1, len(scores) // len(action_strs))
+            start = turn_idx * chunk_size
+            end = min(start + chunk_size, len(scores))
+            if start < len(scores):
+                chunk_scores = scores[start:end]
+                chunk_ids = generated_ids[start:end]
+                H_t, _ = self.entropy_estimator.compute_step_entropy(
+                    logits=chunk_scores, token_ids=chunk_ids
+                )
+                step_entropies.append(H_t.item())
+                step_token_ids.append(chunk_ids.tolist())
+            else:
+                step_entropies.append(0.0)
+                step_token_ids.append([])
 
             if result.done:
                 outcome = result.reward
                 break
+        else:
+            result = env.step(Action(name="respond", kwargs={"content": "Done."}))
+            outcome = result.reward
 
-        return (
-            trajectory,
-            outcome,
-            step_entropies,
-            step_token_ids,
-        )
+        return (trajectory, outcome, step_entropies, step_token_ids)
 
     def _compute_grad_and_ref_logprobs(
         self,
@@ -196,65 +218,86 @@ class AdaptiveRewardTrainer:
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Re-run model.forward() on collected token IDs to get gradient-bearing
-        log_probs for GRPO ratio computation.
-
-        Also computes ref_log_probs from ref_model for the same tokens.
-        Both use the same forward pass, ensuring alignment.
+        log_probs for GRPO ratio computation. BATCHED for GPU efficiency.
 
         Returns:
             grad_logprob_matrix: [n_queries, n_rollouts, max_turns]
             ref_logprob_matrix: [n_queries, n_rollouts, max_turns]
         """
         n_rollouts = self.config.num_rollouts_per_query
+        n_total = n_queries * n_rollouts
+
+        valid_seqs = []
+        valid_indices = []
+        zero_mask = set()
+
+        flat_idx = 0
+        for qi in range(n_queries):
+            for gi in range(n_rollouts):
+                step_tokens = all_token_ids[qi * n_rollouts + gi]
+                for ti in range(max_turns):
+                    toks = step_tokens[ti] if ti < len(step_tokens) else []
+                    if len(toks) >= 2:
+                        valid_seqs.append(torch.tensor(toks, device=self.device))
+                        valid_indices.append((flat_idx, qi, gi, ti, len(toks)))
+                    else:
+                        zero_mask.add(flat_idx)
+                    flat_idx += 1
+
+        if not valid_seqs:
+            zeros = torch.zeros(n_queries, n_rollouts, max_turns, device=self.device)
+            return zeros.clone().requires_grad_(True), zeros.clone()
+
+        padded = torch.nn.utils.rnn.pad_sequence(valid_seqs, batch_first=True, padding_value=0)
+        seq_lens = [len(s) for s in valid_seqs]
+
+        MAX_BATCH = 8
+        seq_sums = {}
+
+        for b_start in range(0, len(valid_seqs), MAX_BATCH):
+            b_end = min(b_start + MAX_BATCH, len(valid_seqs))
+            batch_padded = padded[b_start:b_end]
+            batch_indices = valid_indices[b_start:b_end]
+
+            self.model.train()
+            curr_outputs = self.model(batch_padded)
+            curr_logits = curr_outputs.logits[:, :-1]
+            curr_log_probs = F.log_softmax(curr_logits, dim=-1)
+
+            with torch.no_grad():
+                ref_outputs = self.ref_model(batch_padded)
+                ref_logits = ref_outputs.logits[:, :-1]
+                ref_log_probs = F.log_softmax(ref_logits, dim=-1)
+
+            for local_i, (global_i, qi, gi, ti, tok_len) in enumerate(batch_indices):
+                targets = batch_padded[local_i, 1:tok_len]
+                idx_range = torch.arange(tok_len - 1, device=self.device)
+                curr_lp = curr_log_probs[local_i, idx_range, targets].sum()
+                ref_lp = ref_log_probs[local_i, idx_range, targets].sum()
+                seq_sums[(qi, gi, ti)] = (curr_lp, ref_lp)
+
         grad_lp_list = []
         ref_lp_list = []
 
-        for q_idx in range(n_queries):
-            for g_idx in range(n_rollouts):
-                step_tokens = all_token_ids[q_idx * n_rollouts + g_idx]
-                step_grad_lps = []
-                step_ref_lps = []
-
-                for step_toks in step_tokens:
-                    if len(step_toks) < 2:
-                        step_grad_lps.append(
+        for qi in range(n_queries):
+            for gi in range(n_rollouts):
+                step_grad = []
+                step_ref = []
+                for ti in range(max_turns):
+                    if (qi, gi, ti) in seq_sums:
+                        step_grad.append(seq_sums[(qi, gi, ti)][0])
+                        step_ref.append(seq_sums[(qi, gi, ti)][1])
+                    else:
+                        step_grad.append(
                             torch.zeros((), device=self.device, requires_grad=True)
                         )
-                        step_ref_lps.append(
+                        step_ref.append(
                             torch.zeros((), device=self.device, requires_grad=False)
                         )
-                        continue
+                grad_lp_list.append(torch.stack(step_grad))
+                ref_lp_list.append(torch.stack(step_ref))
 
-                    toks = torch.tensor(step_toks, device=self.device).unsqueeze(0)
-
-                    self.model.train()
-                    curr_outputs = self.model(toks)
-                    curr_logits = curr_outputs.logits[0, :-1]
-                    curr_log_probs = F.log_softmax(curr_logits, dim=-1)
-                    targets = toks[0, 1:]
-                    curr_gen_lp = curr_log_probs[torch.arange(len(targets)), targets]
-                    step_grad_lps.append(curr_gen_lp.sum())
-
-                    with torch.no_grad():
-                        ref_outputs = self.ref_model(toks)
-                        ref_logits = ref_outputs.logits[0, :-1]
-                        ref_log_probs = F.log_softmax(ref_logits, dim=-1)
-                        ref_gen_lp = ref_log_probs[torch.arange(len(targets)), targets]
-                        step_ref_lps.append(ref_gen_lp.sum())
-
-                while len(step_grad_lps) < max_turns:
-                    step_grad_lps.append(
-                        torch.zeros((), device=self.device, requires_grad=True)
-                    )
-                    step_ref_lps.append(
-                        torch.zeros((), device=self.device, requires_grad=False)
-                    )
-                grad_lp_list.append(torch.stack(step_grad_lps[:max_turns]))
-                ref_lp_list.append(torch.stack(step_ref_lps[:max_turns]))
-
-        grad_matrix = torch.stack(grad_lp_list).reshape(
-            n_queries, n_rollouts, max_turns
-        )
+        grad_matrix = torch.stack(grad_lp_list).reshape(n_queries, n_rollouts, max_turns)
         ref_matrix = torch.stack(ref_lp_list).reshape(n_queries, n_rollouts, max_turns)
         return grad_matrix, ref_matrix
 
@@ -462,7 +505,7 @@ class AdaptiveRewardTrainer:
                 successes += 1
         return successes / len(eval_tasks) if eval_tasks else 0.0
 
-    def train(self, train_dataset, eval_tasks: List[Task]):
+    def train(self, train_dataset, eval_tasks: List[Task], sft_dataset=None):
         self.setup_model()
         self.optimizer = torch.optim.AdamW(
             self.model.parameters(),
@@ -470,7 +513,15 @@ class AdaptiveRewardTrainer:
         )
 
         if self.config.sft_warmup_epochs > 0:
-            self.sft_warmup(train_dataset)
+            sft_data = sft_dataset if sft_dataset is not None else train_dataset
+            print(f"SFT warmup: {self.config.sft_warmup_epochs} epochs on {len(sft_data)} samples", flush=True)
+            self.sft_warmup(sft_data)
+            import copy
+            self.ref_model = copy.deepcopy(self.model)
+            self.ref_model.eval()
+            for param in self.ref_model.parameters():
+                param.requires_grad = False
+            print("SFT warmup done, ref_model updated", flush=True)
 
         train_loader = DataLoader(
             train_dataset,
@@ -504,7 +555,8 @@ class AdaptiveRewardTrainer:
                     wandb.log(stats)
                 print(
                     f"Step {step}: loss={stats['loss']:.3f}, "
-                    f"succ={stats['success_rate']:.3f}"
+                    f"succ={stats['success_rate']:.3f}",
+                    flush=True,
                 )
 
             if step % self.config.eval_interval == 0:
@@ -512,7 +564,7 @@ class AdaptiveRewardTrainer:
                 if success_rate > self.best_success_rate:
                     self.best_success_rate = success_rate
                     self.save_checkpoint("best")
-                print(f"  Eval success rate: {success_rate:.3f}")
+                print(f"  Eval success rate: {success_rate:.3f}", flush=True)
 
             if step % self.config.save_interval == 0:
                 self.save_checkpoint(f"step_{step}")
