@@ -17,6 +17,8 @@ from configs.config import (
 from core.entropy import EntropyEstimator
 from core.adaptive_reward import AdaptiveRewardDensity
 from core.hacking_detector import HackingDetector
+from core.signal_bank import SignalBank
+from core.reward_router import RewardRouter, NeedGate, UtilityGate, ReliabilityGate, RiskController
 from training.trainer import AdaptiveRewardTrainer
 from data.tau_dataset import load_tau_bench_dataset, SFTDataset
 
@@ -112,11 +114,25 @@ def run_single(mode: str, model_name: str, seed: int, n_steps: int) -> dict:
         action=config.hacking.action,
     )
 
+    reward_router = None
+    signal_bank = None
+    if config.use_router:
+        signal_bank = SignalBank(max_turns=config.max_turns)
+        reward_router = RewardRouter(
+            need=NeedGate(**config.router_need),
+            utility=UtilityGate(**config.router_utility),
+            reliability=ReliabilityGate(**config.router_reliability),
+            risk_ctrl=RiskController(**config.router_risk),
+            signal_weights=config.router_signal_weights,
+        )
+
     trainer = AdaptiveRewardTrainer(
         config=config,
         entropy_estimator=entropy_estimator,
         adaptive_reward=adaptive_reward,
         hacking_detector=hacking_detector,
+        reward_router=reward_router,
+        signal_bank=signal_bank,
     )
 
     train_dataset = load_tau_bench_dataset(
@@ -155,7 +171,11 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--mode", type=str, default="sparse", choices=["sparse", "adaptive"]
+        "--mode", type=str, default="sparse", choices=[
+            "sparse", "adaptive",
+            "router", "router_need_only", "router_no_reliability", "router_no_risk",
+            "random_gate",
+        ]
     )
     parser.add_argument(
         "--model",

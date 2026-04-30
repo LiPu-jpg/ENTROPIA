@@ -21,14 +21,21 @@ from pathlib import Path
 
 from data.tau_dataset import Task
 from envs.mock_env import MockTauEnv, parse_action_from_text, Action
+from core.signal_bank import SignalBank, SignalBatch
+from core.reward_router import RewardRouter, NeedGate, UtilityGate, ReliabilityGate, RiskController
 
 
 class AdaptiveRewardTrainer:
-    def __init__(self, config, entropy_estimator, adaptive_reward, hacking_detector):
+    def __init__(
+        self, config, entropy_estimator, adaptive_reward, hacking_detector,
+        reward_router=None, signal_bank=None,
+    ):
         self.config = config
         self.entropy_estimator = entropy_estimator
         self.adaptive_reward = adaptive_reward
         self.hacking_detector = hacking_detector
+        self.reward_router = reward_router
+        self.signal_bank = signal_bank
 
         self.model = None
         self.ref_model = None
@@ -319,16 +326,9 @@ class AdaptiveRewardTrainer:
         self,
         all_outcomes: List[float],
         all_entropies: List[List[float]],
+        all_signals: Optional[List[SignalBatch]] = None,
+        all_hacking: Optional[List[bool]] = None,
     ) -> torch.Tensor:
-        """
-        根据结果和熵构建奖励矩阵。
-
-        "sparse" 模式：r[t] = outcome * gamma^(T-1-t)
-        "adaptive" 模式：r[t] = r_sparse + alpha * gate * r_sparse
-
-        返回：
-            reward_matrix: [n_queries * n_rollouts, max_turns]
-        """
         G = self.config.num_rollouts_per_query
         max_turns = self.config.max_turns
         n_total = len(all_outcomes)
@@ -343,10 +343,7 @@ class AdaptiveRewardTrainer:
         reward_matrix = torch.stack(reward_tensors).reshape(-1, G, max_turns)
 
         if self.config.reward_mode == "adaptive":
-            entropy_matrix = torch.tensor(all_entropies, device=self.device).reshape(
-                -1, G, max_turns
-            )
-
+            entropy_matrix = torch.tensor(all_entropies, device=self.device).reshape(-1, G, max_turns)
             gated = []
             for q in range(reward_matrix.shape[0]):
                 for g in range(reward_matrix.shape[1]):
@@ -359,6 +356,55 @@ class AdaptiveRewardTrainer:
                     r_sparse = reward_matrix[q, g]
                     r_adaptive = r_sparse + self.config.adaptive.alpha * gate * r_sparse
                     gated.append(r_adaptive)
+            reward_matrix = torch.stack(gated).reshape(-1, G, max_turns)
+
+        elif self.config.use_router and self.reward_router is not None:
+            gated = []
+            for q in range(reward_matrix.shape[0]):
+                for g in range(reward_matrix.shape[1]):
+                    idx = q * G + g
+                    r_sparse = reward_matrix[q, g]
+                    r_v2 = r_sparse.clone()
+                    if idx < len(all_signals) and idx < len(all_entropies):
+                        sig = all_signals[idx]
+                        ent_list = all_entropies[idx]
+                        for t in range(min(max_turns, len(ent_list))):
+                            step_entropy = ent_list[t] if t < len(ent_list) else 0.0
+                            group_collapse = len(set(
+                                all_outcomes[q * G : (q + 1) * G]
+                            )) <= 1
+                            stagnation = 0.0
+                            signal_vals = {
+                                "info_gain": sig.info_gain[t] if t < len(sig.info_gain) else 0.0,
+                                "efficiency": sig.efficiency_cost[t] if t < len(sig.efficiency_cost) else 0.0,
+                                "relevance": sig.relevance[t] if t < len(sig.relevance) else 0.0,
+                            }
+                            format_v = sig.format_valid[t] if t < len(sig.format_valid) else 1.0
+                            hacking = all_hacking[idx] if all_hacking and idx < len(all_hacking) else False
+                            div = 0.0
+                            proc_r, gates = self.reward_router.route(
+                                step_entropy=step_entropy,
+                                group_collapse=float(group_collapse),
+                                stagnation=stagnation,
+                                signal_values=signal_vals,
+                                format_valid=format_v,
+                                hacking_detected=hacking,
+                                success_divergence=div,
+                            )
+                            r_v2[t] = r_v2[t] + proc_r
+                    gated.append(r_v2)
+            if gated:
+                reward_matrix = torch.stack(gated).reshape(-1, G, max_turns)
+
+        elif self.config.reward_mode == "random_gate":
+            import random
+            gated = []
+            for q in range(reward_matrix.shape[0]):
+                for g in range(reward_matrix.shape[1]):
+                    r_sparse = reward_matrix[q, g]
+                    gate = random.random()
+                    r_rand = r_sparse + 0.5 * gate * r_sparse
+                    gated.append(r_rand)
             reward_matrix = torch.stack(gated).reshape(-1, G, max_turns)
 
         return reward_matrix
@@ -429,6 +475,7 @@ class AdaptiveRewardTrainer:
         all_entropies: List[List[float]] = []
         all_token_ids: List[List[list]] = []
         all_trajectories: List[List[dict]] = []
+        all_signals: List[SignalBatch] = []  # v2
         hacking_detected = False
 
         for data_item in batch:
@@ -458,6 +505,17 @@ class AdaptiveRewardTrainer:
                 all_token_ids.append(padded_tokens[:max_turns])
                 all_trajectories.append(traj)
 
+                # v2: compute process signals
+                if self.config.use_router and self.signal_bank is not None:
+                    signals = self.signal_bank.compute_signals(
+                        step_count=T,
+                    )
+                    if outcome > 0:
+                        self.reward_router.reliability.update("info_gain", 0.5, 1.0)
+                    else:
+                        self.reward_router.reliability.update("info_gain", 0.0, 0.0)
+                    all_signals.append(signals)
+
                 if len(all_outcomes) % G == 1:
                     hacking, reasons = self.hacking_detector.check(
                         rollout_steps=max_turns,
@@ -470,7 +528,13 @@ class AdaptiveRewardTrainer:
 
         n_queries = len(all_outcomes) // G
 
-        reward_matrix = self._build_reward_matrix(all_outcomes, all_entropies)
+        all_hacking = [hacking_detected] * len(all_outcomes)
+
+        reward_matrix = self._build_reward_matrix(
+            all_outcomes, all_entropies,
+            all_signals=all_signals,
+            all_hacking=all_hacking,
+        )
 
         if hacking_detected and self.hacking_detector.should_fallback():
             reward_matrix = reward_matrix * 0.0
@@ -506,6 +570,9 @@ class AdaptiveRewardTrainer:
 
         if self.config.reward_mode == "adaptive":
             stats.update(self.adaptive_reward.get_stats())
+        elif self.config.use_router and self.reward_router is not None:
+            stats.update(self.reward_router.get_stats())
+            stats["router_mode"] = self.config.reward_mode
 
         return stats
 
