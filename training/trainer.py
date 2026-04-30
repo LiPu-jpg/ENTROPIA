@@ -1,12 +1,12 @@
 """
-GRPO trainer with integrated adaptive reward density gating.
+带有自适应奖励密度门控的 GRPO 训练器。
 
-Supports five reward modes:
-  - "adaptive": Direction A — entropy-gated density control
-  - "sparse": ReTool-style binary outcome reward
-  - "dense_igpo": IGPO-style fixed information gain process reward
-  - "dense_fixed": WorkForceAgent-R1 style fixed dense reward (ablation)
-  - "autotool_entropy": AutoTool-style entropy constraint in loss (not reward)
+支持五种奖励模式：
+  - "adaptive"：方向 A — 基于熵门控的密度控制
+  - "sparse"：ReTool 风格的二值结果奖励
+  - "dense_igpo"：IGPO 风格的固定信息增益过程奖励
+  - "dense_fixed"：WorkForceAgent-R1 风格的固定稠密奖励（消融实验）
+  - "autotool_entropy"：AutoTool 风格的损失函数中的熵约束（非奖励）
 """
 
 import torch
@@ -54,7 +54,15 @@ class AdaptiveRewardTrainer:
             lora_config = LoraConfig(
                 r=self.config.lora_r,
                 lora_alpha=self.config.lora_alpha,
-                target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
+                target_modules=[
+                    "q_proj",
+                    "k_proj",
+                    "v_proj",
+                    "o_proj",
+                    "gate_proj",
+                    "up_proj",
+                    "down_proj",
+                ],
                 lora_dropout=0.05,
                 bias="none",
                 task_type="CAUSAL_LM",
@@ -100,15 +108,15 @@ class AdaptiveRewardTrainer:
         max_turns: int = None,
     ) -> Tuple[List[dict], float, List[float], List[float], List[list]]:
         """
-        Plan-then-execute rollout: model generates a full action plan,
-        then we execute it step-by-step in the mock environment.
-        Each action in the plan counts as one step for reward computation.
+        先规划后执行的 rollout：模型生成完整的动作计划，
+        然后在模拟环境中逐步执行。
+        计划中的每个动作作为奖励计算的一个步骤。
 
-        Returns:
-            trajectory: list of step dicts
-            outcome: task reward (0 or 1)
-            step_entropies: [T] entropy per step
-            step_token_ids: [T] list of token ID lists
+        返回：
+            trajectory: 步骤字典列表
+            outcome: 任务奖励（0 或 1）
+            step_entropies: [T] 每步的熵
+            step_token_ids: [T] token ID 列表的列表
         """
         if max_turns is None:
             max_turns = self.config.max_turns
@@ -116,7 +124,7 @@ class AdaptiveRewardTrainer:
         env = MockTauEnv(task)
         env.reset()
 
-        # Build system prompt matching SFT format
+        # 构建与 SFT 格式匹配的系统提示
         sys_prompt = (
             "You are a customer service agent for retail and airline domains. "
             "Available tools: find_user_id_by_email, find_user_id_by_name_zip, "
@@ -145,10 +153,10 @@ class AdaptiveRewardTrainer:
             self.model.eval()
             outputs = self.model.generate(
                 **inputs,
-                    max_new_tokens=512,
-                    do_sample=True,
-                    temperature=0.8,
-                    top_p=0.95,
+                max_new_tokens=512,
+                do_sample=True,
+                temperature=0.8,
+                top_p=0.95,
                 output_scores=True,
                 return_dict_in_generate=True,
                 pad_token_id=self.tokenizer.pad_token_id,
@@ -162,7 +170,7 @@ class AdaptiveRewardTrainer:
 
         scores = torch.stack([s.squeeze(0) for s in outputs.scores])
 
-        # Parse actions from plan (split by ' | ')
+        # 从计划中解析动作（以 ' | ' 分隔）
         action_strs = [a.strip() for a in plan_text.split("|")]
         if not action_strs:
             action_strs = [plan_text]
@@ -178,14 +186,16 @@ class AdaptiveRewardTrainer:
                 action = Action(name="respond", kwargs={"content": action_str})
 
             result = env.step(action)
-            trajectory.append({
-                "turn": turn_idx,
-                "action": action_str,
-                "observation": result.observation,
-                "done": result.done,
-            })
+            trajectory.append(
+                {
+                    "turn": turn_idx,
+                    "action": action_str,
+                    "observation": result.observation,
+                    "done": result.done,
+                }
+            )
 
-            # Distribute entropy and tokens across steps
+            # 在各步骤间分配熵和 token
             chunk_size = max(1, len(scores) // len(action_strs))
             start = turn_idx * chunk_size
             end = min(start + chunk_size, len(scores))
@@ -217,10 +227,10 @@ class AdaptiveRewardTrainer:
         max_turns: int,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
-        Re-run model.forward() on collected token IDs to get gradient-bearing
-        log_probs for GRPO ratio computation. BATCHED for GPU efficiency.
+        对收集的 token ID 重新运行 model.forward()，以获取带梯度的
+        log_probs 用于 GRPO 比率计算。为 GPU 效率进行了批量处理。
 
-        Returns:
+        返回：
             grad_logprob_matrix: [n_queries, n_rollouts, max_turns]
             ref_logprob_matrix: [n_queries, n_rollouts, max_turns]
         """
@@ -248,7 +258,9 @@ class AdaptiveRewardTrainer:
             zeros = torch.zeros(n_queries, n_rollouts, max_turns, device=self.device)
             return zeros.clone().requires_grad_(True), zeros.clone()
 
-        padded = torch.nn.utils.rnn.pad_sequence(valid_seqs, batch_first=True, padding_value=0)
+        padded = torch.nn.utils.rnn.pad_sequence(
+            valid_seqs, batch_first=True, padding_value=0
+        )
         seq_lens = [len(s) for s in valid_seqs]
 
         MAX_BATCH = 8
@@ -297,7 +309,9 @@ class AdaptiveRewardTrainer:
                 grad_lp_list.append(torch.stack(step_grad))
                 ref_lp_list.append(torch.stack(step_ref))
 
-        grad_matrix = torch.stack(grad_lp_list).reshape(n_queries, n_rollouts, max_turns)
+        grad_matrix = torch.stack(grad_lp_list).reshape(
+            n_queries, n_rollouts, max_turns
+        )
         ref_matrix = torch.stack(ref_lp_list).reshape(n_queries, n_rollouts, max_turns)
         return grad_matrix, ref_matrix
 
@@ -307,12 +321,12 @@ class AdaptiveRewardTrainer:
         all_entropies: List[List[float]],
     ) -> torch.Tensor:
         """
-        Build reward matrix from outcomes and entropies.
+        根据结果和熵构建奖励矩阵。
 
-        For "sparse" mode: r[t] = outcome * gamma^(T-1-t)
-        For "adaptive" mode: r[t] = r_sparse + alpha * gate * r_sparse
+        "sparse" 模式：r[t] = outcome * gamma^(T-1-t)
+        "adaptive" 模式：r[t] = r_sparse + alpha * gate * r_sparse
 
-        Returns:
+        返回：
             reward_matrix: [n_queries * n_rollouts, max_turns]
         """
         G = self.config.num_rollouts_per_query
@@ -392,7 +406,7 @@ class AdaptiveRewardTrainer:
     def _compute_entropy_regularization(
         self, rollout_logprob_sums: torch.Tensor
     ) -> torch.Tensor:
-        """AutoTool-style entropy constraint in the loss function."""
+        """AutoTool 风格的损失函数中的熵约束。"""
         target_entropy = 0.5
         neg_entropy = -rollout_logprob_sums.mean()
         return F.mse_loss(
@@ -402,11 +416,11 @@ class AdaptiveRewardTrainer:
 
     def train_step(self, batch: List[dict]) -> dict:
         """
-        One training step:
-          1. Collect rollouts (token_ids, entropies, outcomes, trajectories)
-          2. Compute reward matrix from outcomes (+ adaptive gating if adaptive mode)
-          3. Re-run model forward to get gradient-bearing logprobs + ref logprobs
-          4. Compute GRPO loss and update
+        一次训练步骤：
+          1. 收集 rollout（token_ids、熵、结果、轨迹）
+          2. 根据结果计算奖励矩阵（自适应模式下附加自适应门控）
+          3. 重新运行模型前向传播，获取带梯度的 logprobs 和参考 logprobs
+          4. 计算 GRPO 损失并更新参数
         """
         G = self.config.num_rollouts_per_query
         max_turns = self.config.max_turns
@@ -514,9 +528,13 @@ class AdaptiveRewardTrainer:
 
         if self.config.sft_warmup_epochs > 0:
             sft_data = sft_dataset if sft_dataset is not None else train_dataset
-            print(f"SFT warmup: {self.config.sft_warmup_epochs} epochs on {len(sft_data)} samples", flush=True)
+            print(
+                f"SFT warmup: {self.config.sft_warmup_epochs} epochs on {len(sft_data)} samples",
+                flush=True,
+            )
             self.sft_warmup(sft_data)
             import copy
+
             self.ref_model = copy.deepcopy(self.model)
             self.ref_model.eval()
             for param in self.ref_model.parameters():

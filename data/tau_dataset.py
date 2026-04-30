@@ -1,19 +1,19 @@
 """
-τ-Bench format dataset for training Direction A.
+τ-Bench 格式数据集，用于训练 Direction A。
 
-Each task follows τ-Bench's Task schema:
+每个任务遵循 τ-Bench 的 Task schema：
 - user_id: str
-- instruction: str (user scenario with personality + goals)
-- actions: List[Action] (ground truth tool calls)
-- outputs: List[str] (expected text in agent response)
+- instruction: str（用户场景，包含性格和目标）
+- actions: List[Action]（真实工具调用）
+- outputs: List[str]（代理回复中期望出现的文本）
 
-Data is synthetic but follows τ-Bench's retail domain conventions:
-tools: find_user_id_by_email, find_user_id_by_name_zip, get_user_details,
-       get_order_details, get_product_details, list_all_product_types,
-       modify_pending_order_items, modify_pending_order_address,
-       modify_pending_order_payment, cancel_pending_order,
-       return_delivered_order_items, exchange_delivered_order_items,
-       think, transfer_to_human_agents, respond
+数据是合成的，但遵循 τ-Bench 的零售领域规范：
+工具包括：find_user_id_by_email, find_user_id_by_name_zip, get_user_details,
+        get_order_details, get_product_details, list_all_product_types,
+        modify_pending_order_items, modify_pending_order_address,
+        modify_pending_order_payment, cancel_pending_order,
+        return_delivered_order_items, exchange_delivered_order_items,
+        think, transfer_to_human_agents, respond
 """
 
 from dataclasses import dataclass, field
@@ -23,7 +23,7 @@ import random
 
 @dataclass
 class Action:
-    """τ-Bench action: tool name + kwargs."""
+    """τ-Bench 动作：工具名称 + kwargs。"""
 
     name: str
     kwargs: Dict[str, Any]
@@ -31,7 +31,7 @@ class Action:
 
 @dataclass
 class Task:
-    """τ-Bench task definition."""
+    """τ-Bench 任务定义。"""
 
     user_id: str
     instruction: str
@@ -41,11 +41,11 @@ class Task:
 
 
 # ──────────────────────────────────────────────────
-# Synthetic τ-Bench retail tasks (25 tasks)
+# 合成 τ-Bench 零售任务（25 个任务）
 # ──────────────────────────────────────────────────
 
 SYNTHETIC_TASKS = [
-    # === Single-action tasks ===
+    # === 单动作任务 ===
     Task(
         task_id=1,
         user_id="alice_wong_3203",
@@ -140,7 +140,7 @@ SYNTHETIC_TASKS = [
         ],
         outputs=["Cancelled", "#W5765741"],
     ),
-    # === Exchange tasks ===
+    # === 换货任务 ===
     Task(
         task_id=5,
         user_id="eve_nguyen_2175",
@@ -193,7 +193,7 @@ SYNTHETIC_TASKS = [
         ],
         outputs=["exchanged", "#W9318778"],
     ),
-    # === Modify order tasks ===
+    # === 修改订单任务 ===
     Task(
         task_id=7,
         user_id="grace_ito_8499",
@@ -270,7 +270,7 @@ SYNTHETIC_TASKS = [
         ],
         outputs=["address", "#W3386832"],
     ),
-    # === Multi-action tasks (harder) ===
+    # === 多动作任务（较难） ===
     Task(
         task_id=10,
         user_id="jack_brown_1356",
@@ -375,7 +375,7 @@ SYNTHETIC_TASKS = [
         ],
         outputs=["address", "E-Reader", "#W2575533"],
     ),
-    # === More diverse tasks ===
+    # === 更多多样化任务 ===
     Task(
         task_id=13,
         user_id="mia_zhang_8533",
@@ -449,7 +449,7 @@ SYNTHETIC_TASKS = [
         ],
         outputs=["exchanged", "glass"],
     ),
-    # === Three-action tasks (harder) ===
+    # === 三动作任务（较难） ===
     Task(
         task_id=16,
         user_id="peter_tan_6696",
@@ -547,7 +547,7 @@ SYNTHETIC_TASKS = [
         ],
         outputs=["Modified", "exchanged"],
     ),
-    # === Tasks with identity lookup + action ===
+    # === 身份查询 + 动作任务 ===
     Task(
         task_id=19,
         user_id="sam_wright_8900",
@@ -590,7 +590,7 @@ SYNTHETIC_TASKS = [
         ],
         outputs=["Return", "#W6426438"],
     ),
-    # === Complex multi-step tasks ===
+    # === 复杂多步任务 ===
     Task(
         task_id=21,
         user_id="uma_patel_2152",
@@ -660,7 +660,7 @@ SYNTHETIC_TASKS = [
         ],
         outputs=["modified", "orders"],
     ),
-    # === Simpler tasks for curriculum ===
+    # === 用于课程学习的简单任务 ===
     Task(
         task_id=23,
         user_id="wang_lee_1273",
@@ -733,7 +733,7 @@ SYNTHETIC_TASKS = [
     ),
 ]
 
-# All valid τ-Bench tool names (for action parsing)
+# 所有有效的 τ-Bench 工具名称（用于动作解析）
 TAU_BENCH_TOOLS = {
     "find_user_id_by_email",
     "find_user_id_by_name_zip",
@@ -771,10 +771,10 @@ TAU_BENCH_TOOLS = {
 
 class TauBenchDataset:
     """
-    Dataset class wrapping τ-Bench format tasks.
+    包装 τ-Bench 格式任务的数据集类。
 
-    Each sample = (task_id, instruction, tools_summary, ground_truth_actions).
-    Compatible with torch.utils.data.DataLoader.
+    每个样本 = (task_id, instruction, tools_summary, ground_truth_actions)。
+    与 torch.utils.data.DataLoader 兼容。
     """
 
     def __init__(self, tasks: List[Task], split: str = "train"):
@@ -807,6 +807,7 @@ def load_tau_bench_dataset(
     if use_simia:
         try:
             from data.simia_tasks import SIMIA_TASKS
+
             tasks = list(SIMIA_TASKS)
         except ImportError:
             print("Warning: simia_tasks.py not found")
@@ -814,6 +815,7 @@ def load_tau_bench_dataset(
     elif use_fuvty:
         try:
             from scripts.fuvty_tasks import FUVTY_TASKS
+
             tasks = list(FUVTY_TASKS)
         except ImportError:
             print("Warning: fuvty_tasks.py not found, falling back to synthetic")
@@ -824,9 +826,9 @@ def load_tau_bench_dataset(
     rng.shuffle(tasks)
 
     if split == "train":
-        selected = tasks[: int(len(tasks) * 0.8)]  # 80% for training
+        selected = tasks[: int(len(tasks) * 0.8)]  # 80% 用于训练
     else:
-        selected = tasks[int(len(tasks) * 0.8) :]  # 20% for eval
+        selected = tasks[int(len(tasks) * 0.8) :]  # 20% 用于评估
 
     if n_samples is not None:
         selected = selected[:n_samples]
@@ -876,14 +878,19 @@ class SFTDataset:
                 f"<|im_start|>assistant\n{task_to_sft_string(task)}<|im_end|>"
             )
             encoded = tokenizer(
-                prompt, truncation=True, max_length=max_length,
-                padding="max_length", return_tensors="pt",
+                prompt,
+                truncation=True,
+                max_length=max_length,
+                padding="max_length",
+                return_tensors="pt",
             )
-            self.inputs.append({
-                "input_ids": encoded["input_ids"][0].tolist(),
-                "attention_mask": encoded["attention_mask"][0].tolist(),
-                "labels": encoded["input_ids"][0].tolist(),
-            })
+            self.inputs.append(
+                {
+                    "input_ids": encoded["input_ids"][0].tolist(),
+                    "attention_mask": encoded["attention_mask"][0].tolist(),
+                    "labels": encoded["input_ids"][0].tolist(),
+                }
+            )
 
     def __len__(self):
         return len(self.inputs)

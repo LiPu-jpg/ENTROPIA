@@ -1,21 +1,23 @@
 """
-Convert Simia-Agent/Simia-Tau-SFT-90k-Hermes to ENTROPIA Task format.
-Multi-turn conversations → instruction + action plan.
+将 Simia-Agent/Simia-Tau-SFT-90k-Hermes 转换为 ENTROPIA Task 格式。
+多轮对话 → instruction + action plan。
 """
+
 import json
 import re
 import sys
 import os
 from typing import List, Tuple
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from datasets import load_dataset
 
 
 def extract_function_calls(text: str) -> List[Tuple[str, dict]]:
-    """Extract function calls from a gpt turn text."""
+    """从 gpt turn 文本中提取函数调用。"""
     calls = []
-    pattern = r'FUNCTION_CALL:\s*(\{.*?\})'
+    pattern = r"FUNCTION_CALL:\s*(\{.*?\})"
     for match in re.finditer(pattern, text):
         try:
             obj = json.loads(match.group(1))
@@ -27,7 +29,7 @@ def extract_function_calls(text: str) -> List[Tuple[str, dict]]:
             continue
 
     if not calls:
-        tool_call_pattern = r'<tool_call>\s*(\{.*?\})\s*</tool_call>'
+        tool_call_pattern = r"<tool_call>\s*(\{.*?\})\s*</tool_call>"
         for match in re.finditer(tool_call_pattern, text, re.DOTALL):
             try:
                 obj = json.loads(match.group(1))
@@ -42,7 +44,7 @@ def extract_function_calls(text: str) -> List[Tuple[str, dict]]:
 
 
 def convert_simia_to_tasks(ds, n: int = 3000) -> list:
-    """Convert Simia conversations to Task objects."""
+    """将 Simia 对话转换为 Task 对象。"""
     from data.tau_dataset import Task, Action
 
     tasks = []
@@ -57,7 +59,7 @@ def convert_simia_to_tasks(ds, n: int = 3000) -> list:
 
             instruction = conv[0]["value"] if conv else ""
             actions = []
-            for turn in conv[1:]:  # skip first human turn
+            for turn in conv[1:]:  # 跳过第一个人类 turn
                 if turn.get("from") == "gpt":
                     calls = extract_function_calls(turn["value"])
                     for name, args in calls:
@@ -68,13 +70,15 @@ def convert_simia_to_tasks(ds, n: int = 3000) -> list:
             if not actions:
                 continue
 
-            tasks.append(Task(
-                task_id=idx,
-                user_id=f"simia_{idx}",
-                instruction=instruction,
-                actions=actions,
-                outputs=[],
-            ))
+            tasks.append(
+                Task(
+                    task_id=idx,
+                    user_id=f"simia_{idx}",
+                    instruction=instruction,
+                    actions=actions,
+                    outputs=[],
+                )
+            )
         except Exception as e:
             continue
 
@@ -83,6 +87,7 @@ def convert_simia_to_tasks(ds, n: int = 3000) -> list:
 
 if __name__ == "__main__":
     import argparse
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--n", type=int, default=3000)
     parser.add_argument("--pct", type=str, default="4%")
@@ -99,13 +104,16 @@ if __name__ == "__main__":
 
     if tasks:
         t = tasks[0]
-        print(f"  Example: {len(t.actions)} actions, instruction: {t.instruction[:100]}...")
+        print(
+            f"  Example: {len(t.actions)} actions, instruction: {t.instruction[:100]}..."
+        )
 
     if args.dry_run:
         print("Dry run done.")
         sys.exit(0)
 
     import shutil
+
     dataset_dir = "/mnt/home/user46/ENTROPIA/data"
     os.makedirs(dataset_dir, exist_ok=True)
 
@@ -120,7 +128,11 @@ if __name__ == "__main__":
             actions_repr = []
             for a in task.actions:
                 actions_repr.append(f'Action(name="{a.name}", kwargs={a.kwargs!r})')
-            safe_inst = task.instruction.replace("\\", "\\\\").replace('"', '\\"').replace("'", "\\'")
+            safe_inst = (
+                task.instruction.replace("\\", "\\\\")
+                .replace('"', '\\"')
+                .replace("'", "\\'")
+            )
             f.write(
                 f'    Task(task_id={task.task_id}, user_id="{task.user_id}",\n'
                 f'         instruction="{safe_inst}",\n'

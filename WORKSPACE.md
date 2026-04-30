@@ -1,158 +1,52 @@
-# ENTROPIA — Entropy-Gated Adaptive Reward Density for LLM Agent RL
+# ENTROPIA-Search 工作区
 
-## 项目概述
+## 活跃论点
 
-**ENTROPIA** 是一个 LLM Agent 强化学习研究框架，核心算法基于自研的"熵门控自适应奖励密度控制"机制。
+ENTROPIA-Search 将复合奖励设计转化为自适应、可靠、状态条件化的监督。
 
-```
-r_t^adaptive = r_t^sparse + α · σ(H_t - H_threshold) · r_t^dense
-```
+当前活跃方法为：
 
-### 核心问题
-
-在 Agent RL 中，密集奖励（dense reward）能加速收敛，但会导致 **Reward Hacking**：
-- 模型学会"刷奖励"而不是真正完成任务
-- 响应长度趋向零、重复模式、死循环
-
-稀疏奖励（sparse reward）稳定但不提供过程信号，收敛慢。
-
-### 核心思路
-
-用 **token 级熵** 作为"不确定性信号"来动态控制奖励密度：
-- 高熵（不确定）→ 门开 → 注入密集奖励 → 引导探索
-- 低熵（自信）→ 门关 → 抑制密集奖励 → 防止 Hacking
-
-### 训练环境与硬件
-
-- **验证环境**：MacBook M5（逻辑验证，small model = gpt2）
-- **训练环境**：4×NVIDIA L20 GPU 服务器（可 2+2 分配或 4 卡一起）
-- **基模**：Qwen2.5-7B-Instruct + LoRA (r=64, α=128)
-- **训练框架**：GRPO（Group Relative Policy Optimization）
-
----
-
-## 技术架构
-
-```
-src/
-├── core/
-│   ├── entropy.py          # Token 级熵估计（仅在关键 token 上计算）
-│   ├── adaptive_reward.py  # 熵门控自适应密度函数
-│   └── hacking_detector.py # 三信号 Reward Hacking 监控器
-├── configs/
-│   └── config.py           # 完整训练配置 + 基线预设 + 消融矩阵
-├── training/
-│   └── trainer.py         # GRPO trainer，支持 5 种奖励模式
-├── data/
-│   └── tau_dataset.py     # τ-Bench 格式合成数据（25 个任务）
-├── envs/
-│   └── mock_env.py        # Mock τ-Bench 环境（快速训练）
-└── scripts/
-    └── run.py             # 主入口，支持 CLI
+```text
+Need-Utility-Reliability reward routing under a Risk controller.
 ```
 
-### 奖励模式
+## 保留材料
 
-| 模式 | 说明 |
-|------|------|
-| `adaptive` | 完整熵门控自适应密度（Direction A） |
-| `sparse` | ReTool 风格二进制结果奖励 |
-| `dense_igpo` | IGPO 固定信息增益过程奖励 |
-| `dense_fixed` | WorkForceAgent-R1 固定密集奖励（消融） |
-| `autotool_entropy` | AutoTool 熵约束（在 loss 中，不在奖励中） |
+- `docs/paper_formula_methodology.md` — 规范公式与方法结构
+- `docs/design_v2_reward_routing.md` — 设计原理与研究故事线
+- `docs/research_archive/` — 已清理的方向选择与旧研究轮次结论归档
+- `docs/related_work.md` — 文献定位
+- `core/`、`training/`、`configs/` — 当前实现基础
 
----
+## 已清理材料
 
-## 快速开始
+旧的探索工作区已完成整合：
 
-```bash
-# 完整自适应奖励密度
-python scripts/run.py --mode adaptive
+- 逐轮调查输出已合并至 `docs/research_archive/`
+- 侧项目工作区已总结为候选方向
+- Direction-A 的重复实现镜像
+- 缓存和 pyc 文件
+- 已被当前公式/方法文档取代的过时 v1 文档
 
-# 基线对比
-python scripts/run.py --mode sparse
-python scripts/run.py --mode dense_igpo
-python scripts/run.py --mode dense_fixed
-python scripts/run.py --mode autotool_entropy
+原始论文文件已移至 `../references/papers/`。
 
-# 消融实验
-python scripts/run.py --mode adaptive --ablation threshold   # 固定 vs EMA 阈值
-python scripts/run.py --mode adaptive --ablation granularity   # Step vs Traj 熵
-python scripts/run.py --mode adaptive --ablation random_gate # 随机门控
+## 近期工程目标
 
-# 使用自定义模型
-python scripts/run.py --mode adaptive --model Qwen/Qwen2.5-7B-Instruct
-```
+将代码库对齐至论文设计 v2 + 新文献吸收：
 
----
+1. 构建显式过程信号（Process Signal Bank）。
+2. 实现 Reliability Gate 三种变体（R1 加法 / R2 乘法 / R3 Softmax 竞争）。
+3. 实现 Credit Granularity 两种变体（C1 单层 / C2 双层 GiGPO+NUR 门控）。
+4. Utility Gate 势函数形式化。
+5. Reliability Gate 新增跨信号一致性 $\kappa$ 维度。
+6. 通过 Need、Utility、Reliability、Validity 和 Risk 进行路由。
+7. 从路由后的过程信号更新 GRPO 奖励。
+8. 记录路由诊断信息以供论文分析。
+9. 新增 Baseline 对比：CW-GRPO、CalibAdv、GiGPO、StepPO。
 
-## 核心算法细节
+### 实验矩阵
 
-### 熵门控机制
-
-```python
-gate_t = sigmoid(temp * (H_t - H_threshold))
-```
-
-- `H_t`：关键 token 上的 token 级熵（工具名、参数、停止符）
-- `H_threshold`：EMA 平滑更新的阈值（课程式适应）
-- `temp`：sigmoid 温度参数（越高门控切换越陡峭）
-
-### EMA 阈值更新
-
-```python
-H_threshold ← β · mean(H_batch) + (1-β) · H_threshold
-```
-
-创造课程式适应：
-- 训练早期：高熵 → 低阈值 → 门开 → 密集奖励 → 快收敛
-- 训练后期：低熵 → 高阈值 → 门关 → 稀疏奖励 → 防 Hacking
-
-### GRPO Loss
-
-```python
-ratio = π_θ / π_ref
-clipped = clip(ratio, 1-ε, 1+ε)
-loss = -min(ratio · advantage, clipped · advantage)
-```
-
----
-
-## 已知问题与局限
-
-### Critical
-
-1. **Loss = -0.0**：MacBook 测试时使用 gpt2（base model，无 instruction tuning），生成乱码 → logprobs 极端 → loss 崩溃。在 L20 上使用 Qwen2.5-7B-Instruct 可解决。
-
-2. **Mock 环境**：当前使用预脚本化的观察结果，非真实 τ-Bench 环境的 LLM 用户模拟器。真实环境需接入 `sierra-research/tau2-bench`。
-
-3. **`train()` 调用未初始化 optimizer**：`setup_model()` 不初始化优化器，外部调用前需手动 `trainer.optimizer = torch.optim.AdamW(...)`。
-
-### 诚实评估
-
-Direction A 的创新是"奖励密度调度"，而非根本性的奖励设计创新。实际收益主要是**收敛速度提升**，不是能力边界的突破。
-
----
-
-## 后续研究方向
-
-详见 `docs/extensions.md`
-
----
-
-## 相关论文
-
-详见 `docs/papers.md`
-
----
-
-## 环境要求
-
-```txt
-torch>=2.0
-transformers>=4.40
-peft>=0.10
-wandb
-```
-
-GPU：8×A100 推荐（完整训练），7B 模型可用 4×A100 + LoRA。
+- 主干实验：R(3) × C(2) = 6 组变体对比
+- 消融实验：9 组（含 NUR 各因子、$\kappa$、Budget、C2 门控）
+- 外部 baseline：12 组（含新 baseline）
+- 总计约 20 组，HotpotQA + Qwen2.5-7B GRPO

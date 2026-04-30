@@ -1,7 +1,8 @@
 """
-Quick comparison: sparse vs adaptive on Qwen2.5-1.5B-Instruct.
-Minimal setup to validate core hypothesis in ~1-2 hours.
+快速对比：Qwen2.5-1.5B-Instruct 上的 sparse vs adaptive。
+最小化设置，在约 1-2 小时内验证核心假设。
 """
+
 import sys
 import os
 import json
@@ -23,15 +24,38 @@ from data.tau_dataset import load_tau_bench_dataset, SFTDataset
 def build_key_token_ids(tokenizer):
     key_patterns = {
         "tool_name": [
-            "search", "click", "fill", "select", "scroll", "type",
-            "goto", "go_back", "refresh", "submit", "press", "hover",
-            "find", "get", "post", "put", "delete", "cancel", "modify",
-            "return", "exchange", "transfer", "list",
+            "search",
+            "click",
+            "fill",
+            "select",
+            "scroll",
+            "type",
+            "goto",
+            "go_back",
+            "refresh",
+            "submit",
+            "press",
+            "hover",
+            "find",
+            "get",
+            "post",
+            "put",
+            "delete",
+            "cancel",
+            "modify",
+            "return",
+            "exchange",
+            "transfer",
+            "list",
         ],
         "action_type": ["click", "fill", "select", "scroll", "type", "press", "hover"],
         "stop_token": [
-            "<|im_end|>", "</action>", "<|endoftext|>", "[STOP]",
-            "Observation:", "\n\n",
+            "<|im_end|>",
+            "</action>",
+            "<|endoftext|>",
+            "[STOP]",
+            "Observation:",
+            "\n\n",
         ],
     }
     key_token_ids = {}
@@ -45,7 +69,7 @@ def build_key_token_ids(tokenizer):
 
 
 def run_single(mode: str, model_name: str, seed: int, n_steps: int) -> dict:
-    """Run one experiment and return results dict."""
+    """运行一次实验并返回结果字典。"""
     config = ABLATION_PRESETS[mode]()
     config.model_name = model_name
     config.seed = seed
@@ -130,14 +154,21 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--mode", type=str, default="sparse",
-                        choices=["sparse", "adaptive"])
-    parser.add_argument("--model", type=str, default="/mnt/home/user41/downloaded_models/Qwen/Qwen2.5-7B-Instruct")
+    parser.add_argument(
+        "--mode", type=str, default="sparse", choices=["sparse", "adaptive"]
+    )
+    parser.add_argument(
+        "--model",
+        type=str,
+        default="/mnt/home/user41/downloaded_models/Qwen/Qwen2.5-7B-Instruct",
+    )
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--n_steps", type=int, default=60)
     args = parser.parse_args()
 
-    print(f"=== Quick CMP: mode={args.mode}, model={args.model}, steps={args.n_steps} ===")
+    print(
+        f"=== Quick CMP: mode={args.mode}, model={args.model}, steps={args.n_steps} ==="
+    )
     print(f"Start: {datetime.now().isoformat()}")
 
     result = run_single(args.mode, args.model, args.seed, args.n_steps)

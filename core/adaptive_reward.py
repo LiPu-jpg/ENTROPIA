@@ -1,15 +1,15 @@
 """
-Adaptive Reward Density — the core algorithm of Direction A.
+自适应奖励密度 —— 方向 A 的核心算法。
 
 r_t^adaptive = r_t^sparse + α · σ(H_t - H_threshold) · r_t^dense
 
-where:
-  H_t          = token-level entropy at step t (on key decision tokens only)
-  H_threshold  = EMA-tracked mean entropy (curriculum-style adaptation)
-  σ            = sigmoid gating function (smooth, continuous)
-  α            = density coefficient (controls max dense injection)
-  r_t^sparse   = discounted outcome reward
-  r_t^dense    = process reward (IGPO-style info gain, or pluggable)
+其中：
+  H_t          = 第 t 步的 token 级别熵（仅计算关键决策 token）
+  H_threshold  = EMA 跟踪的平均熵（课程学习式自适应）
+  σ            = sigmoid 门控函数（平滑、连续）
+  α            = 密度系数（控制最大稠密奖励注入量）
+  r_t^sparse   = 折扣结果奖励
+  r_t^dense    = 过程奖励（IGPO 风格信息增益，或可插拔）
 """
 
 import torch
@@ -20,12 +20,12 @@ from dataclasses import dataclass
 
 @dataclass
 class AdaptiveRewardState:
-    """Running state for adaptive reward computation."""
+    """自适应奖励计算的运行状态。"""
 
-    H_threshold: float  # Current EMA threshold
-    batch_entropies: list = None  # For logging
-    gate_history: list = None  # For analysis
-    hacking_events: int = 0  # Count of hacking detections
+    H_threshold: float  # 当前 EMA 阈值
+    batch_entropies: list = None  # 用于日志记录
+    gate_history: list = None  # 用于分析
+    hacking_events: int = 0  # 作弊检测计数
 
     def __post_init__(self):
         self.batch_entropies = []
@@ -34,13 +34,13 @@ class AdaptiveRewardState:
 
 class AdaptiveRewardDensity:
     """
-    Core algorithm: entropy-driven dynamic reward density control.
+    核心算法：熵驱动的动态奖励密度控制。
 
-    Key innovations vs prior work:
-    1. Entropy is used as a PREVENTIVE gate, not a reactive regularizer (vs AutoTool)
-    2. Density is dynamically scheduled, not fixed (vs IGPO)
-    3. Adaptive to training progress via EMA threshold (curriculum-like)
-    4. Pluggable r_t^dense — works with any process reward method
+    相较于先前工作的关键创新：
+    1. 熵用作预防性门控，而非反应性正则化（对比 AutoTool）
+    2. 密度动态调度，而非固定（对比 IGPO）
+    3. 通过 EMA 阈值实现课程学习式的训练进度自适应
+    4. 可插拔的 r_t^dense —— 兼容任何过程奖励方法
     """
 
     def __init__(
@@ -53,13 +53,13 @@ class AdaptiveRewardDensity:
         eps: float = 1e-8,
     ):
         """
-        Args:
-            alpha: Density control coefficient. Higher = more dense reward injected.
-            H_threshold_init: Initial entropy threshold. Updated via EMA during training.
-            beta: EMA decay rate for threshold update (0.01-0.05 recommended).
-            sigmoid_temp: Temperature for sigmoid gating. temp=1 is standard sigmoid.
-            gate_min: Minimum gate value (0 = can fully close, >0 = always some dense).
-            eps: Numerical stability.
+        参数：
+            alpha: 密度控制系数。越高 = 注入越多稠密奖励。
+            H_threshold_init: 初始熵阈值。训练期间通过 EMA 更新。
+            beta: 阈值更新的 EMA 衰减率（推荐 0.01-0.05）。
+            sigmoid_temp: sigmoid 门控的温度。temp=1 为标准 sigmoid。
+            gate_min: 门控最小值（0 = 可完全关闭，>0 = 始终有稠密奖励）。
+            eps: 数值稳定性常数。
         """
         self.alpha = alpha
         self.beta = beta
@@ -70,15 +70,15 @@ class AdaptiveRewardDensity:
 
     def compute_gate(self, H_t: torch.Tensor) -> torch.Tensor:
         """
-        Compute density gate g_t = σ(H_t - H_threshold) for a single step.
+        计算单步的密度门控 g_t = σ(H_t - H_threshold)。
 
-        High H_t (uncertain) → gate ≈ 1 (inject dense reward)
-        Low H_t (confident) → gate ≈ 0 (suppress dense reward)
+        高 H_t（不确定）→ 门控 ≈ 1（注入稠密奖励）
+        低 H_t（确定）→ 门控 ≈ 0（抑制稠密奖励）
 
-        Args:
-            H_t: Entropy at step t, scalar or [batch]
-        Returns:
-            g_t: Gate value in [gate_min, 1]
+        参数：
+            H_t: 第 t 步的熵，标量或 [batch]
+        返回：
+            g_t: 范围在 [gate_min, 1] 的门控值
         """
         gate = torch.sigmoid(self.sigmoid_temp * (H_t - self.state.H_threshold))
         gate = torch.clamp(gate, min=self.gate_min, max=1.0)
@@ -86,21 +86,21 @@ class AdaptiveRewardDensity:
 
     def compute_adaptive_reward(
         self,
-        r_sparse: torch.Tensor,  # [num_steps] discounted outcome reward
-        r_dense: torch.Tensor,  # [num_steps] process reward (IG, TIPS, etc.)
-        H_t: torch.Tensor,  # [num_steps] per-step entropy
+        r_sparse: torch.Tensor,  # [num_steps] 折扣结果奖励
+        r_dense: torch.Tensor,  # [num_steps] 过程奖励（IG、TIPS 等）
+        H_t: torch.Tensor,  # [num_steps] 每步熵
     ) -> torch.Tensor:
         """
-        Compute adaptive reward for a full trajectory.
+        计算完整轨迹的自适应奖励。
 
         r_t = r_t^sparse + α · σ(H_t - H_threshold) · r_t^dense
 
-        Args:
-            r_sparse: Discounted outcome rewards per step
-            r_dense: Process rewards per step (from any credit assignment method)
-            H_t: Per-step entropies
-        Returns:
-            r_adaptive: [num_steps] combined adaptive rewards
+        参数：
+            r_sparse: 每步的折扣结果奖励
+            r_dense: 每步的过程奖励（来自任何功劳分配方法）
+            H_t: 每步的熵
+        返回：
+            r_adaptive: [num_steps] 组合自适应奖励
         """
         gate = self.compute_gate(H_t)  # [num_steps]
         self.state.gate_history.append(gate.mean().item())
@@ -109,11 +109,11 @@ class AdaptiveRewardDensity:
 
     def update_threshold(self, batch_mean_entropy: float):
         """
-        EMA update: H_threshold ← β · mean(H_batch) + (1-β) · H_threshold
+        EMA 更新：H_threshold ← β · mean(H_batch) + (1-β) · H_threshold
 
-        This creates curriculum-style adaptation:
-        - Early training: high entropy → low threshold → dense rewards → fast learning
-        - Late training: low entropy → high threshold → sparse rewards → prevent hacking
+        这实现了课程学习式自适应：
+        - 训练早期：高熵 → 低阈值 → 稠密奖励 → 快速学习
+        - 训练后期：低熵 → 高阈值 → 稀疏奖励 → 防止作弊
         """
         self.state.H_threshold = (
             self.beta * batch_mean_entropy + (1 - self.beta) * self.state.H_threshold
@@ -121,7 +121,7 @@ class AdaptiveRewardDensity:
         self.state.batch_entropies.append(batch_mean_entropy)
 
     def get_stats(self) -> dict:
-        """Get training statistics for logging."""
+        """获取训练统计数据用于日志记录。"""
         return {
             "H_threshold": self.state.H_threshold,
             "mean_gate": (
@@ -136,21 +136,21 @@ class AdaptiveRewardDensity:
 
 
 # ──────────────────────────────────────────────────
-# Pluggable process reward functions
-# These serve as r_t^dense in the adaptive reward formula.
-# You can plug in IGPO, TIPS, or any other process reward.
+# 可插拔的过程奖励函数
+# 这些函数用作自适应奖励公式中的 r_t^dense。
+# 可以插入 IGPO、TIPS 或任何其他过程奖励。
 # ──────────────────────────────────────────────────
 
 
 def igpo_information_gain(
-    model_prob_current: torch.Tensor,  # p(answer | s_t), scalar per rollout
-    model_prob_prev: torch.Tensor,  # p(answer | s_{t-1}), scalar per rollout
-    ground_truth_answer_id: int,  # token ID of ground truth answer
+    model_prob_current: torch.Tensor,  # p(answer | s_t)，每个推理的标量
+    model_prob_prev: torch.Tensor,  # p(answer | s_{t-1})，每个推理的标量
+    ground_truth_answer_id: int,  # 正确答案的 token ID
 ) -> torch.Tensor:
     """
-    IGPO-style information gain process reward.
+    IGPO 风格信息增益过程奖励。
     IG_t = log p(answer|s_t) - log p(answer|s_{t-1})
-    = marginal increase in model's belief in the correct answer.
+    = 模型对正确答案信念的边际增长。
     """
     ig = torch.log(model_prob_current.clamp(min=1e-8)) - torch.log(
         model_prob_prev.clamp(min=1e-8)
@@ -159,35 +159,35 @@ def igpo_information_gain(
 
 
 def tips_potential_reward(
-    potential_current: torch.Tensor,  # Φ(s_t), potential at current state
-    potential_prev: torch.Tensor,  # Φ(s_{t-1}), potential at previous state
+    potential_current: torch.Tensor,  # Φ(s_t)，当前状态的势能
+    potential_prev: torch.Tensor,  # Φ(s_{t-1})，前一步状态的势能
     gamma: float = 0.9,
 ) -> torch.Tensor:
     """
-    TIPS-style potential-based reward shaping.
+    TIPS 风格基于势能的奖励塑形。
     r_t^dense = Φ(s_t) - γ · Φ(s_{t-1})
     """
     return potential_current - gamma * potential_prev
 
 
 def progress_reward(
-    task_progress_current: float,  # 0-1 progress at current step
-    task_progress_prev: float,  # 0-1 progress at previous step
+    task_progress_current: float,  # 当前步骤的 0-1 进度
+    task_progress_prev: float,  # 前一步骤的 0-1 进度
 ) -> float:
     """
-    Simple progress-based process reward.
+    简单的基于进度的过程奖励。
     r_t^dense = progress_current - progress_prev
     """
     return task_progress_current - task_progress_prev
 
 
 def outcome_discounted_reward(
-    outcome: float,  # +1 (success) or -1 (failure) or 0 (partial)
+    outcome: float,  # +1（成功）、-1（失败）或 0（部分完成）
     step_idx: int,
     total_steps: int,
     gamma: float = 0.9,
 ) -> float:
     """
-    Discounted outcome reward: r_t^sparse = outcome * γ^{total_steps - step_idx - 1}
+    折扣结果奖励：r_t^sparse = outcome * γ^{total_steps - step_idx - 1}
     """
     return outcome * (gamma ** (total_steps - step_idx - 1))

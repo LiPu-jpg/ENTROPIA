@@ -1,100 +1,98 @@
-# ENTROPIA
+# ENTROPIA-Search
 
-**ENTROPIA** — Entropy-Gated Adaptive Reward Density for LLM Agent RL.
+ENTROPIA-Search 是一个面向长时序 LLM Agent RL 的可靠性校准奖励路由框架。
 
-A research framework for studying adaptive reward density control in LLM Agent reinforcement learning.
+该项目最初起步于基于熵门控的自适应奖励密度控制。当前面向论文的设计范围更广：
 
-## Core Algorithm
-
-```
-r_t^adaptive = r_t^sparse + α · σ(H_t - H_threshold) · r_t^dense
-```
-
-Where:
-- `H_t`: token-level entropy on key decision tokens (tool names, parameters, stop tokens)
-- `H_threshold`: EMA-tracked mean entropy (curriculum-style adaptation)
-- `σ`: sigmoid gating function (smooth, continuous)
-- `α`: density coefficient
-- `r_t^sparse`: discounted outcome reward
-- `r_t^dense`: pluggable process reward (IGPO, TIPS, etc.)
-
-## Key Innovation
-
-Uses entropy as a **preventive gate**, not a reactive regularizer. Density is dynamically scheduled, not fixed. Adaptive to training progress via EMA threshold.
-
-## Quick Start
-
-```bash
-# Full adaptive reward density
-python scripts/run.py --mode adaptive
-
-# Baselines
-python scripts/run.py --mode sparse           # ReTool-style binary reward
-python scripts/run.py --mode dense_igpo       # IGPO fixed information gain
-python scripts/run.py --mode dense_fixed      # WorkForceAgent-R1 fixed dense
-python scripts/run.py --mode autotool_entropy # AutoTool entropy constraint
-
-# Ablation studies
-python scripts/run.py --mode adaptive --ablation threshold    # Fixed vs EMA threshold
-python scripts/run.py --mode adaptive --ablation granularity  # Step vs traj entropy
-python scripts/run.py --mode adaptive --ablation random_gate  # Sanity: random gating
-
-# Custom model
-python scripts/run.py --mode adaptive --model Qwen/Qwen2.5-7B-Instruct
+```text
+CRAFT-Search: what reward signals exist?
+ENTROPIA: when should each signal be trusted and routed?
 ```
 
-## Architecture
+## 核心方法
 
-```
-src/
-├── core/
-│   ├── entropy.py          # Token-level entropy estimation (key tokens only)
-│   ├── adaptive_reward.py   # Entropy-gated adaptive density function
-│   └── hacking_detector.py # Three-signal reward hacking monitor
-├── configs/
-│   └── config.py           # Full training config + baselines + ablations
-├── training/
-│   └── trainer.py         # GRPO trainer, 5 reward modes
-├── data/
-│   └── tau_dataset.py     # τ-Bench format synthetic data (25 tasks)
-├── envs/
-│   └── mock_env.py        # Mock τ-Bench environment
-└── scripts/
-    └── run.py             # Main entry point with CLI
-```
+ENTROPIA 通过 Need、Utility 和 Reliability 门控，在 Risk 控制器下路由一组轻量级过程信号。
 
-## Reward Modes
+\[
+g^k_t = N_t \cdot U^k_t \cdot L^k_s \cdot M^k_t \cdot (1-H^{risk}_t)
+\]
 
-| Mode | Description |
-|------|-------------|
-| `adaptive` | Full entropy-gated adaptive density (Direction A) |
-| `sparse` | ReTool-style binary outcome reward |
-| `dense_igpo` | IGPO-style fixed information gain process reward |
-| `dense_fixed` | WorkForceAgent-R1 fixed dense reward (ablation) |
-| `autotool_entropy` | AutoTool-style entropy constraint in loss |
+\[
+r^{ENT}_{g,t}
+= r^{out}_{g,t}
++ B_s \sum_{k\in\mathcal{K}} w^k_s g^k_{g,t}\tilde S^k_{g,t}
++ \epsilon_{g,t}
+\]
 
-## Hardware
+其中：
 
-- **Validation**: MacBook M5 (logic verification, gpt2)
-- **Training**: 4×NVIDIA L20 GPU server (2+2 or 4-together)
-- **Base model**: Qwen2.5-7B-Instruct + LoRA (r=64, α=128)
+- `Need` 估计仅结果监督是否充分。
+- `Utility` 估计当前步骤是否提供任务相关信息。
+- `Reliability` 估计过程信号是否与结果改善对齐。
+- `Risk` 在出现奖励作弊模式时抑制稠密监督。
+- `B_s` 是自适应稠密监督预算。
 
-## Requirements
+## 当前代码状态
 
-```
-torch>=2.0
-transformers>=4.40
-peft>=0.10
-wandb
+已实现的 v1 组件：
+
+- `core/entropy.py` — 关键 token 熵与不确定性估计
+- `core/adaptive_reward.py` — v1 基于熵门控的自适应奖励密度
+- `core/hacking_detector.py` — 奖励作弊监控器
+- `training/trainer.py` — 带 sparse/dense/adaptive 基线的 GRPO 训练器
+
+已知的实现差距：
+
+```text
+training/trainer.py currently uses:
+  r_adaptive = r_sparse + alpha * gate * r_sparse
+
+The paper design requires:
+  r_adaptive = r_outcome + routed process signals
 ```
 
-## Papers
+## 文档
 
-See `docs/papers.md` for full paper references and notes.
+按以下顺序阅读：
 
-## Documentation
+1. `docs/paper_formula_methodology.md`
+   - 最终符号表示、奖励函数、GRPO 集成与消融映射。
 
-- `WORKSPACE.md` — Full project overview (Chinese)
-- `docs/algorithm.md` — Core algorithm details
-- `docs/extensions.md` — Future research directions
-- `docs/papers.md` — Related papers and training data sources
+2. `docs/design_v2_reward_routing.md`
+   - 设计原理及项目如何从熵门控演进到当前方案。
+
+3. `docs/related_work.md`
+   - 文献定位与基线地图。
+
+4. `docs/research_archive/`
+   - 已清理的旧研究轮次与方向选择材料归档。
+
+5. `docs/README.md`
+   - 文档索引。
+
+## 仓库结构
+
+```text
+ENTROPIA/
+├── configs/          # training configs
+├── core/             # entropy, reward, hacking/risk modules
+├── data/             # tau-style data utilities
+├── docs/             # paper-facing docs
+├── envs/             # mock environment
+├── scripts/          # run/download helpers
+├── training/         # GRPO trainer
+└── utils/
+```
+
+## 下一步工程计划
+
+1. 添加 `core/process_signals.py`。
+2. 添加 `core/reward_router.py`。
+3. 重构 `training/trainer.py`，从显式过程信号构建路由奖励。
+4. 添加诊断指标：
+   - 稠密预算曲线
+   - 门控精度
+   - 过程-结果相关性
+   - 奖励-成功率散度
+   - 格式博弈率
+   - 非零优势比例

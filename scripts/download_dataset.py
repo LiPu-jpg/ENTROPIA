@@ -1,6 +1,7 @@
 """
-Convert fuvty/tau-bench-synthetic to ENTROPIA Task format.
+将 fuvty/tau-bench-synthetic 转换为 ENTROPIA Task 格式。
 """
+
 import json
 import sys
 import os
@@ -12,7 +13,7 @@ from data.tau_dataset import Task, Action, TauBenchDataset
 
 
 def convert_fuvty_to_tasks(ds) -> list:
-    """Convert fuvty/tau-bench-synthetic 'tasks' config to ENTROPIA Task format."""
+    """将 fuvty/tau-bench-synthetic 的 'tasks' 配置转换为 ENTROPIA Task 格式。"""
     tasks = []
     for idx, item in enumerate(ds):
         try:
@@ -20,7 +21,7 @@ def convert_fuvty_to_tasks(ds) -> list:
             scenario = json.loads(item["user_scenario"])
             instructions = scenario.get("instructions", {})
 
-            # Build instruction text
+            # 构建 instruction 文本
             task_inst = instructions.get("task_instructions", "")
             reason = instructions.get("reason_for_call", "")
             known = instructions.get("known_info", "")
@@ -31,7 +32,7 @@ def convert_fuvty_to_tasks(ds) -> list:
                 instruction_parts.append(known)
             instruction = " ".join(instruction_parts)
 
-            # Extract ground truth actions (non-respond)
+            # 提取真实动作（非 respond）
             gt_actions = []
             for act in criteria.get("actions", []):
                 name = act["name"]
@@ -39,7 +40,7 @@ def convert_fuvty_to_tasks(ds) -> list:
                     continue
                 gt_actions.append(Action(name=name, kwargs=act.get("arguments", {})))
 
-            # Extract output assertions as expected keywords
+            # 提取输出断言作为期望关键词
             outputs = []
             for assertion in criteria.get("nl_assertions", []):
                 if isinstance(assertion, str):
@@ -47,7 +48,7 @@ def convert_fuvty_to_tasks(ds) -> list:
                 elif isinstance(assertion, dict):
                     outputs.append(assertion.get("content", ""))
 
-            # Generate user_id from instruction
+            # 从 instruction 生成 user_id
             user_id = item.get("id", f"user_{idx}")
 
             task = Task(
@@ -89,7 +90,7 @@ if __name__ == "__main__":
         print("Dry run done.")
         sys.exit(0)
 
-    # Save as module
+    # 保存为模块
     output_path = os.path.join(
         os.path.dirname(os.path.abspath(__file__)),
         "fuvty_tasks.py",
@@ -109,13 +110,13 @@ if __name__ == "__main__":
             outputs_repr = repr(task.outputs) if task.outputs else "[]"
             f.write(
                 f'    Task(task_id={task.task_id}, user_id="{task.user_id}",\n'
-                f'         instruction={task.instruction!r},\n'
+                f"         instruction={task.instruction!r},\n"
                 f"         actions=[{', '.join(actions_repr)}],\n"
                 f"         outputs={outputs_repr}),\n"
             )
         f.write("]\n")
 
-    # Also track new tool names
+    # 同时追踪新的工具名称
     tool_names = set()
     for t in selected:
         for a in t.actions:

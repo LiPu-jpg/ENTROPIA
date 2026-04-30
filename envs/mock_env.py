@@ -1,9 +1,9 @@
 """
-Mock τ-Bench environment for training Direction A.
+用于训练 Direction A 的 Mock τ-Bench 环境。
 
-Implements the τ-Bench Env API: reset → step → reward.
-Does NOT use a language-model user simulator — observations are
-pre-scripted to keep training fast and deterministic.
+实现了 τ-Bench Env API：reset → step → reward。
+不使用语言模型用户模拟器——观察结果是预脚本化的，
+以保持训练快速且确定性。
 """
 
 import re
@@ -30,19 +30,19 @@ class EnvResetResult:
 
 def parse_action_from_text(action_text: str) -> Optional[Action]:
     """
-    Extract a τ-Bench Action from model-generated text.
+    从模型生成的文本中提取 τ-Bench Action。
 
-    Tries multiple parsing strategies:
+    尝试多种解析策略：
     1. JSON: {"name": "tool", "kwargs": {...}}
-    2. Function call: tool_name(key=val, ...)
-    3. XML-style: <action>tool_name</action>
-    4. Fallback: extract first known tool name from text
+    2. 函数调用: tool_name(key=val, ...)
+    3. XML 风格: <action>tool_name</action>
+    4. 回退：从文本中提取第一个已知工具名称
     """
     action_text = action_text.strip()
     if action_text.startswith("(") and action_text.endswith(")"):
         action_text = action_text[1:-1].strip()
 
-    # Strategy 1: JSON object
+    # 策略 1：JSON 对象
     if action_text.startswith("{"):
         try:
             obj = json.loads(action_text)
@@ -50,7 +50,7 @@ def parse_action_from_text(action_text: str) -> Optional[Action]:
         except (json.JSONDecodeError, KeyError):
             pass
 
-    # Strategy 2: Python-style function call: tool_name(key=val, ...)
+    # 策略 2：Python 风格函数调用: tool_name(key=val, ...)
     func_match = re.match(r"^(\w+)\s*\((.+)\)\s*$", action_text, re.DOTALL)
     if func_match:
         name = func_match.group(1)
@@ -58,12 +58,12 @@ def parse_action_from_text(action_text: str) -> Optional[Action]:
             kwargs = _parse_python_kwargs(func_match.group(2))
             return Action(name=name, kwargs=kwargs)
 
-    # Strategy 3: XML-style <action>tool_name</action> or similar
+    # 策略 3：XML 风格 <action>tool_name</action> 或类似格式
     for tool_name in TAU_BENCH_TOOLS:
         if f"<action>{tool_name}</action>" in action_text:
             return Action(name=tool_name, kwargs={})
 
-    # Strategy 4: First known tool name found in text
+    # 策略 4：在文本中找到的第一个已知工具名称
     for tool_name in sorted(TAU_BENCH_TOOLS, key=len, reverse=True):
         if tool_name in action_text:
             return Action(name=tool_name, kwargs={})
@@ -72,10 +72,10 @@ def parse_action_from_text(action_text: str) -> Optional[Action]:
 
 
 def _parse_python_kwargs(kwargs_str: str) -> Dict[str, Any]:
-    """Parse Python-style kwargs string like: key1='val1', key2=['a','b']"""
+    """解析 Python 风格的 kwargs 字符串，格式如: key1='val1', key2=['a','b']"""
     kwargs = {}
 
-    # Split by commas that aren't inside brackets/quotes
+    # 按逗号分隔，但忽略括号/引号内的逗号
     pairs = _smart_split(kwargs_str, ",")
 
     for pair in pairs:
@@ -87,7 +87,7 @@ def _parse_python_kwargs(kwargs_str: str) -> Dict[str, Any]:
         key = key.strip()
         val_str = val_str.strip()
 
-        # Parse the value
+        # 解析值
         val = _parse_python_value(val_str)
         kwargs[key] = val
 
@@ -95,25 +95,25 @@ def _parse_python_kwargs(kwargs_str: str) -> Dict[str, Any]:
 
 
 def _parse_python_value(s: str) -> Any:
-    """Parse a single Python-style value."""
+    """解析单个 Python 风格的值。"""
     s = s.strip()
 
-    # String
+    # 字符串
     if (s.startswith('"') and s.endswith('"')) or (
         s.startswith("'") and s.endswith("'")
     ):
         return s[1:-1]
 
-    # List
+    # 列表
     if s.startswith("[") and s.endswith("]"):
         items = _smart_split(s[1:-1], ",")
         return [_parse_python_value(item.strip()) for item in items if item.strip()]
 
-    # Dict
+    # 字典
     if s.startswith("{") and s.endswith("}"):
         return _parse_python_kwargs(s[1:-1])
 
-    # Number
+    # 数字
     try:
         return int(s)
     except ValueError:
@@ -123,12 +123,12 @@ def _parse_python_value(s: str) -> Any:
     except ValueError:
         pass
 
-    # Fallback: string
+    # 回退：字符串
     return s
 
 
 def _smart_split(text: str, sep: str) -> List[str]:
-    """Split by separator, respecting nested brackets and quotes."""
+    """按分隔符分割，同时处理嵌套的括号和引号。"""
     parts = []
     current = []
     depth_bracket = 0
@@ -164,14 +164,14 @@ def _smart_split(text: str, sep: str) -> List[str]:
 
 class MockTauEnv:
     """
-    Mock τ-Bench environment for training.
+    用于训练的 Mock τ-Bench 环境。
 
-    API matches τ-Bench's Env class:
+    API 与 τ-Bench 的 Env 类匹配：
     - reset(task_index) → EnvResetResult
     - step(action: Action) → EnvStepResult
 
-    Reward: binary (1.0 = task completed correctly, 0.0 = otherwise).
-    Observations are pre-scripted per action type.
+    奖励：二进制的（1.0 = 任务正确完成，0.0 = 其他情况）。
+    观察结果是按动作类型预脚本化的。
     """
 
     OBSERVATIONS = {
@@ -249,11 +249,11 @@ class MockTauEnv:
 
     def _compute_reward(self) -> float:
         """
-        Binary task success reward.
+        二进制任务成功奖励。
 
-        Checks:
-        1. All ground truth non-respond actions were taken.
-        2. If task has outputs, at least one output string appears in responses.
+        检查：
+        1. 所有真实非 respond 动作都已被执行。
+        2. 如果任务有 outputs，至少有一个输出字符串出现在回复中。
         """
         gt_non_respond = [
             a
@@ -264,14 +264,14 @@ class MockTauEnv:
         if not gt_non_respond:
             return 1.0
 
-        # Check each required action was taken (by name match)
+        # 检查每个所需动作都已被执行（按名称匹配）
         taken_names = {a.name for a in self.taken_actions}
         all_actions_taken = all(gt.name in taken_names for gt in gt_non_respond)
 
         if not all_actions_taken:
             return 0.0
 
-        # Check outputs if any
+        # 检查 outputs（如果有的话）
         if self.task.outputs:
             respond_texts = [
                 a.kwargs.get("content", "")

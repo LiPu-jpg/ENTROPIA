@@ -1,15 +1,15 @@
 """
-Main entry point for Direction A experiments.
+方向 A 实验的主入口。
 
-Usage:
-    python run.py --mode adaptive          # Full adaptive reward density
-    python run.py --mode sparse            # ReTool-style sparse baseline
-    python run.py --mode dense_igpo        # IGPO fixed dense baseline
-    python run.py --mode dense_fixed       # WorkForceAgent-R1 fixed dense baseline
-    python run.py --mode autotool_entropy  # AutoTool entropy constraint baseline
-    python run.py --ablation threshold     # Ablation: fixed vs EMA threshold
-    python run.py --ablation granularity   # Ablation: step vs traj entropy
-    python run.py --ablation random_gate   # Sanity check: random gating
+用法：
+    python run.py --mode adaptive          # 完整自适应奖励密度
+    python run.py --mode sparse            # ReTool 风格稀疏基线
+    python run.py --mode dense_igpo        # IGPO 固定稠密基线
+    python run.py --mode dense_fixed       # WorkForceAgent-R1 固定稠密基线
+    python run.py --mode autotool_entropy  # AutoTool 熵约束基线
+    python run.py --ablation threshold     # 消融实验：固定阈值 vs EMA 阈值
+    python run.py --ablation granularity   # 消融实验：步骤级 vs 轨迹级熵
+    python run.py --ablation random_gate   # 合理性检查：随机门控
 """
 
 import argparse
@@ -33,7 +33,7 @@ from data.tau_dataset import load_tau_bench_dataset
 
 
 def build_key_token_ids(tokenizer):
-    """Build key token ID mapping from tokenizer vocabulary."""
+    """从分词器词汇表中构建关键 token ID 映射。"""
     key_patterns = {
         "tool_name": [
             "search",
@@ -58,7 +58,7 @@ def build_key_token_ids(tokenizer):
         "stop_token": [
             "<|im_end|>",
             "</action>",
-            "<|endoftext|>",
+            "",
             "[STOP]",
             "Observation:",
             "\n\n",
@@ -96,7 +96,7 @@ def get_config_for_mode(mode, ablation=None):
 
 
 def run_experiment(config):
-    """Run a full experiment with the given configuration."""
+    """使用给定配置运行完整实验。"""
 
     from transformers import AutoTokenizer
 
