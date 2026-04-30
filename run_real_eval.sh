@@ -13,14 +13,13 @@ echo "Node: $(hostname)"
 
 source /mnt/data/hpc/support/soft/anaconda3/bin/activate entropia
 cd /mnt/home/user46/ENTROPIA
-mkdir -p logs
+mkdir -p logs outputs
 
 export PYTHONUNBUFFERED=1
 export PYTORCH_ALLOC_CONF=expandable_segments:True
 export TOKENIZERS_PARALLELISM=false
 
-# 先测已有的 sparse + adaptive checkpoints
-python -u scripts/test_real.py --mode sparse --n 50
-python -u scripts/test_real.py --mode adaptive --n 50
+# 自动发现所有新的 training output
+python -u scripts/test_real.py --all --n 50 2>&1 | tee outputs/real_eval_log.txt
 
 echo "Done."
