@@ -160,7 +160,7 @@ class AdaptiveRewardTrainer:
             self.model.eval()
             outputs = self.model.generate(
                 **inputs,
-                max_new_tokens=512,
+                    max_new_tokens=384,
                 do_sample=True,
                 temperature=0.8,
                 top_p=0.95,
@@ -270,7 +270,7 @@ class AdaptiveRewardTrainer:
         )
         seq_lens = [len(s) for s in valid_seqs]
 
-        MAX_BATCH = 8
+        MAX_BATCH = 4
         seq_sums = {}
 
         for b_start in range(0, len(valid_seqs), MAX_BATCH):
@@ -282,6 +282,8 @@ class AdaptiveRewardTrainer:
             curr_outputs = self.model(batch_padded)
             curr_logits = curr_outputs.logits[:, :-1]
             curr_log_probs = F.log_softmax(curr_logits, dim=-1)
+            del curr_outputs
+            torch.cuda.empty_cache()
 
             with torch.no_grad():
                 ref_outputs = self.ref_model(batch_padded)
