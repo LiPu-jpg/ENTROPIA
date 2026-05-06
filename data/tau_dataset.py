@@ -884,11 +884,13 @@ class SFTDataset:
                 padding="max_length",
                 return_tensors="pt",
             )
+            labels = encoded["input_ids"][0].clone()
+            labels[encoded["attention_mask"][0] == 0] = -100
             self.inputs.append(
                 {
                     "input_ids": encoded["input_ids"][0].tolist(),
                     "attention_mask": encoded["attention_mask"][0].tolist(),
-                    "labels": encoded["input_ids"][0].tolist(),
+                    "labels": labels.tolist(),
                 }
             )
 
