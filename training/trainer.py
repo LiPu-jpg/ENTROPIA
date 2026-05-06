@@ -376,7 +376,7 @@ class AdaptiveRewardTrainer:
                             stagnation = 0.0
                             signal_vals = {
                                 "info_gain": sig.info_gain[t] if t < len(sig.info_gain) else 0.0,
-                                "efficiency": sig.efficiency_cost[t] if t < len(sig.efficiency_cost) else 0.0,
+                                "efficiency_cost": sig.efficiency_cost[t] if t < len(sig.efficiency_cost) else 0.0,
                                 "relevance": sig.relevance[t] if t < len(sig.relevance) else 0.0,
                             }
                             format_v = sig.format_valid[t] if t < len(sig.format_valid) else 1.0

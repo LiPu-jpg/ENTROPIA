@@ -121,7 +121,10 @@ def run_single(mode: str, model_name: str, seed: int, n_steps: int) -> dict:
         reward_router = RewardRouter(
             need=NeedGate(**config.router_need),
             utility=UtilityGate(**config.router_utility),
-            reliability=ReliabilityGate(**config.router_reliability),
+            reliability=ReliabilityGate(
+                variant=config.router_reliability_variant,
+                **config.router_reliability,
+            ),
             risk_ctrl=RiskController(**config.router_risk),
             signal_weights=config.router_signal_weights,
         )
@@ -173,7 +176,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--mode", type=str, default="sparse", choices=[
             "sparse", "adaptive",
-            "router", "router_need_only", "router_no_reliability", "router_no_risk",
+            "router", "router_r2", "router_r3",
+            "router_need_only", "router_no_reliability", "router_no_risk",
             "random_gate",
         ]
     )

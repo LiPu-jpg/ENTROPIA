@@ -112,16 +112,17 @@ class UtilityGate:
 @dataclass
 class ReliabilityGate:
     """
-    L^k_s = σ(a·ρ + b·ξ + c·δ - d·χ)
+    L^k_s = 对每个信号 k 估计近期是否与 outcome 对齐
 
-    四个统计量:
-      - ρ: process-outcome correlation
-      - ξ: advantage sign agreement
-      - δ: discriminativeness（好/坏轨迹 signal 差）
-      - χ: proxy gaming risk
+    三种变体:
+      R1 (additive): σ(a·ρ + b·ξ + c·δ − d·χ)         ← 各维度互相补偿
+      R2 (multiplicative): σρ(ρ) × σξ(ξ) × σδ(δ)       ← 一票否决
+      R3 (softmax): 信号间竞争 dense budget              ← 自动淘汰不可靠信号
     """
 
+    variant: str = "R1"  # "R1" | "R2" | "R3"
     window_size: int = 50
+    temp_L: float = 1.0  # shared temperature for R2/R3 sigmoid
     a: float = 0.4
     b: float = 0.3
     c: float = 0.2
@@ -133,7 +134,7 @@ class ReliabilityGate:
     def __post_init__(self):
         self._process_history = {
             "info_gain": deque(maxlen=self.window_size),
-            "efficiency": deque(maxlen=self.window_size),
+            "efficiency_cost": deque(maxlen=self.window_size),
         }
 
     def update(self, signal_name: str, process_sum: float, outcome: float):
@@ -142,23 +143,21 @@ class ReliabilityGate:
         self._process_history[signal_name].append(process_sum)
         self._outcome_history.append(outcome)
 
-    def compute(self, signal_name: str) -> float:
+    def _compute_stats(self, signal_name: str) -> Tuple[float, float, float, float]:
+        """计算四个统计量: (rho, xi, delta, chi)"""
         if signal_name not in self._process_history:
-            return 0.5
+            return 0.0, 0.5, 0.0, 0.0
         proc = list(self._process_history[signal_name])
         outc = list(self._outcome_history)
         n = min(len(proc), len(outc))
         if n < 4:
-            return 0.5
-
+            return 0.0, 0.5, 0.0, 0.0
         proc = proc[-n:]
         outc = outc[-n:]
 
-        # ρ: process-outcome correlation
         rho = 0.0
         if max(proc) - min(proc) > 1e-6 and max(outc) - min(outc) > 1e-6:
-            p_mean = sum(proc) / n
-            o_mean = sum(outc) / n
+            p_mean = sum(proc) / n; o_mean = sum(outc) / n
             cov = sum((p - p_mean) * (o - o_mean) for p, o in zip(proc, outc)) / n
             p_std = (sum((p - p_mean) ** 2 for p in proc) / n) ** 0.5
             o_std = (sum((o - o_mean) ** 2 for o in outc) / n) ** 0.5
@@ -166,7 +165,6 @@ class ReliabilityGate:
                 rho = cov / (p_std * o_std)
             rho = max(-1.0, min(1.0, rho))
 
-        # δ: discriminativeness
         median_out = sorted(outc)[n // 2]
         good_sig = [proc[i] for i in range(n) if outc[i] > median_out]
         bad_sig = [proc[i] for i in range(n) if outc[i] <= median_out]
@@ -175,20 +173,55 @@ class ReliabilityGate:
             delta = sum(good_sig) / len(good_sig) - sum(bad_sig) / len(bad_sig)
             delta = max(0.0, delta)
 
-        # ξ: advantage agreement proxy (简化: outcome 为正时信号也是正的比例)
-        xi = 0.5
         sig_pos = sum(1 for i in range(n) if proc[i] > 0 and outc[i] > 0)
         sig_neg = sum(1 for i in range(n) if proc[i] <= 0 and outc[i] <= 0)
-        if n > 0:
-            xi = (sig_pos + sig_neg) / n
+        xi = (sig_pos + sig_neg) / n if n > 0 else 0.5
 
-        # χ: proxy gaming (简化: 无)
         chi = 0.0
+        return rho, xi, delta, chi
 
-        L = float(torch.sigmoid(
-            torch.tensor(self.a * rho + self.b * xi + self.c * delta - self.d * chi)
-        ).item())
+    def _sigmoid_zscore(self, x: float) -> float:
+        return float(torch.sigmoid(torch.tensor(x / self.temp_L)).item())
+
+    def compute(self, signal_name: str) -> float:
+        rho, xi, delta, chi = self._compute_stats(signal_name)
+
+        if self.variant == "R1":
+            # 加法: 互相补偿
+            L = float(torch.sigmoid(
+                torch.tensor(self.a * rho + self.b * xi + self.c * delta - self.d * chi)
+            ).item())
+
+        elif self.variant == "R2":
+            # 乘法: 一票否决
+            L = (self._sigmoid_zscore(rho) * self._sigmoid_zscore(xi) *
+                 self._sigmoid_zscore(delta))
+            L = max(0.01, min(1.0, L))
+
+        elif self.variant == "R3":
+            # Softmax: 信号间竞争，compute 返回 ρ 用于后续 softmax
+            L = float(torch.sigmoid(torch.tensor(self.a * rho + self.b * xi)).item())
+
+        else:
+            L = 0.5
+
         return L
+
+    def compute_softmax_weights(
+        self, need: float, signals: Dict[str, float], utilities: Dict[str, float]
+    ) -> Dict[str, float]:
+        """R3 Softmax: 信号间竞争 dense budget。返回每个信号的 softmax 权重。"""
+        scores = {}
+        for name, val in signals.items():
+            rho, _, _, _ = self._compute_stats(name)
+            scores[name] = need * utilities.get(name, 0.5) * max(0.0, rho) * val
+        if not scores:
+            return {}
+        max_s = max(scores.values()) if scores else 1.0
+        if max_s <= 0:
+            return {k: 1.0 / len(scores) for k in scores}
+        exp_sum = sum(math.exp(s / max_s) for s in scores.values())
+        return {k: math.exp(v / max_s) / exp_sum for k, v in scores.items()}
 
 
 # ──────────────────────────────────────────────────
@@ -325,41 +358,47 @@ class RewardRouter:
 
         # Per-signal routing
         total_reward = 0.0
-        gates = {"need": N_t, "risk": risk}
+        gates = {"need": N_t, "risk": risk, "reliability_variant": self.reliability.variant}
 
-        for signal_name, weight in self.signal_weights.items():
-            if signal_name not in signal_values:
-                continue
+        if self.reliability.variant == "R3":
+            # Softmax competition: signals compete for dense budget
+            utilities = {}
+            for signal_name in signal_values:
+                utilities[signal_name] = self.utility(signal_values[signal_name])
+            softmax_w = self.reliability.compute_softmax_weights(N_t, signal_values, utilities)
+            for signal_name, alpha in softmax_w.items():
+                value = signal_values.get(signal_name, 0.0)
+                M_t = format_valid
+                contribution = self.risk_ctrl.budget * alpha * value / max(len(softmax_w), 1)
+                total_reward += contribution
+                gates[f"w_{signal_name}"] = alpha
+                gates[f"g_{signal_name}"] = alpha
+        else:
+            # R1/R2: per-signal gating
+            for signal_name, weight in self.signal_weights.items():
+                if signal_name not in signal_values:
+                    continue
 
-            value = signal_values[signal_name]
+                value = signal_values[signal_name]
+                U_t = self.utility(value)
+                L_s = self.reliability.compute(signal_name)
+                M_t = format_valid
+                g_t = N_t * U_t * L_s * M_t * (1.0 - risk)
 
-            # Utility
-            U_t = self.utility(value)
+                if signal_name not in self._ema_signals:
+                    self._ema_signals[signal_name] = g_t
+                else:
+                    self._ema_signals[signal_name] = (
+                        self.ema_beta * g_t
+                        + (1 - self.ema_beta) * self._ema_signals[signal_name]
+                    )
+                g_t_smooth = self._ema_signals[signal_name]
 
-            # Reliability (batch-level)
-            L_s = self.reliability.compute(signal_name)
-
-            # Validity mask
-            M_t = format_valid
-
-            # Final gate
-            g_t = N_t * U_t * L_s * M_t * (1.0 - risk)
-
-            # EMA smooth
-            if signal_name not in self._ema_signals:
-                self._ema_signals[signal_name] = g_t
-            else:
-                self._ema_signals[signal_name] = (
-                    self.ema_beta * g_t
-                    + (1 - self.ema_beta) * self._ema_signals[signal_name]
-                )
-            g_t_smooth = self._ema_signals[signal_name]
-
-            contribution = weight * self.risk_ctrl.budget * g_t_smooth * value
-            total_reward += contribution
-            gates[f"g_{signal_name}"] = g_t
-            gates[f"u_{signal_name}"] = U_t
-            gates[f"l_{signal_name}"] = L_s
+                contribution = weight * self.risk_ctrl.budget * g_t_smooth * value
+                total_reward += contribution
+                gates[f"g_{signal_name}"] = g_t
+                gates[f"u_{signal_name}"] = U_t
+                gates[f"l_{signal_name}"] = L_s
 
         gates["budget"] = self.risk_ctrl.budget
         return total_reward, gates

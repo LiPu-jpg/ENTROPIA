@@ -120,8 +120,9 @@ class TrainingConfig:
         eta_collapse=0.1, eta_hack=0.2, eta_conflict=0.1,
     ))
     router_signal_weights: dict = field(default_factory=lambda: dict(
-        info_gain=0.6, efficiency=0.2, relevance=0.2,
+        info_gain=0.6, efficiency_cost=0.2, relevance=0.2,
     ))
+    router_reliability_variant: str = "R1"  # "R1"(additive) | "R2"(multiplicative) | "R3"(softmax)
 
     # Environment
     env_name: str = "tau_bench"  # tau_bench | alfworld | webarena
@@ -233,6 +234,19 @@ ABLATION_PRESETS = {
     ),
     "random_gate": lambda **kw: TrainingConfig(
         reward_mode="random_gate", use_router=True,
+        **kw,
+    ),
+    # v2 Router Reliability variants
+    "router_r2": lambda **kw: TrainingConfig(
+        reward_mode="router", use_router=True,
+        router_reliability_variant="R2",
+        router_reliability={"variant": "R2", "window_size": 50, "temp_L": 1.0},
+        **kw,
+    ),
+    "router_r3": lambda **kw: TrainingConfig(
+        reward_mode="router", use_router=True,
+        router_reliability_variant="R3",
+        router_reliability={"variant": "R3", "window_size": 50, "temp_L": 1.0, "a": 0.4, "b": 0.3},
         **kw,
     ),
 }
