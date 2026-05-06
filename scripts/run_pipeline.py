@@ -49,7 +49,7 @@ source /mnt/data/hpc/support/soft/anaconda3/bin/activate entropia
 cd {PROJ}
 mkdir -p logs outputs/exp_{exp_id}
 
-export WANDB_MODE=offline PYTHONUNBUFFERED=1 TOKENIZERS_PARALLELISM=false PYTORCH_ALLOC_CONF=expandable_segments:True
+export WANDB_MODE=offline PYTHONUNBUFFERED=1 TOKENIZERS_PARALLELISM=false PYTORCH_ALLOC_CONF=expandable_segments:True CUDA_LAUNCH_BLOCKING=1
 
 python -u scripts/quick_cmp.py \\
     --mode {mode} --model {MODEL} --n_steps {N_STEPS} --seed {seed}

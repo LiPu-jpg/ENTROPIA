@@ -175,7 +175,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--mode", type=str, default="sparse", choices=[
-            "sparse", "adaptive",
+            "sparse", "dense_igpo", "adaptive",
             "router", "router_r2", "router_r3",
             "router_need_only", "router_no_reliability", "router_no_risk",
             "random_gate",
