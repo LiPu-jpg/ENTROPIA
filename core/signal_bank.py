@@ -98,12 +98,18 @@ class SignalBank:
             signals.format_valid.append(1.0 if format_issues == 0 else 0.0)
 
         # 更新运行统计
-        for key in ["info_gain", "efficiency"]:
-            vals = getattr(signals, key)
+        for key in ["info_gain", "efficiency_cost"]:
+            vals = getattr(signals, key, [])
+            if not vals:
+                continue
+            if key not in self._history:
+                self._history[key] = deque(maxlen=self.window_size)
             for v in vals:
                 self._history[key].append(v)
             if len(self._history[key]) >= 2:
                 vs = list(self._history[key])
+                if key not in self._running_stats:
+                    self._running_stats[key] = {"mu": 0.0, "sigma": 1.0}
                 self._running_stats[key]["mu"] = sum(vs) / len(vs)
                 self._running_stats[key]["sigma"] = max(
                     (sum((x - self._running_stats[key]["mu"]) ** 2 for x in vs) / len(vs)) ** 0.5,
