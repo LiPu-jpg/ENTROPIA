@@ -74,3 +74,4 @@ wandb/
 # Misc
 *.bak
 *.tmpslurm-43829.out
+slurm-*.out
