@@ -70,7 +70,7 @@ def build_key_token_ids(tokenizer):
     return key_token_ids
 
 
-def run_single(mode: str, model_name: str, seed: int, n_steps: int) -> dict:
+def run_single(mode: str, model_name: str, seed: int, n_steps: int = 200) -> dict:
     """运行一次实验并返回结果字典。"""
     config = ABLATION_PRESETS[mode]()
     config.model_name = model_name
@@ -79,13 +79,13 @@ def run_single(mode: str, model_name: str, seed: int, n_steps: int) -> dict:
     config.sft_warmup_epochs = 1
     config.sft_learning_rate = 5e-5
     config.sft_batch_size = 2
-    config.rl_batch_size = 2
-    config.num_rollouts_per_query = 4
+    config.rl_batch_size = 4
+    config.num_rollouts_per_query = 8
     config.num_gpus = 2
     config.max_turns = 10
-    config.log_interval = 2
-    config.eval_interval = 5
-    config.save_interval = 25
+    config.log_interval = 5
+    config.eval_interval = 10
+    config.save_interval = 50
     config.wandb_project = ""
     config.output_dir = f"./outputs/quick_{mode}_{datetime.now().strftime('%H%M')}"
 
@@ -187,7 +187,7 @@ if __name__ == "__main__":
         default="/mnt/home/user41/downloaded_models/Qwen/Qwen2.5-7B-Instruct",
     )
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--n_steps", type=int, default=60)
+    parser.add_argument("--n_steps", type=int, default=200)
     args = parser.parse_args()
 
     print(
