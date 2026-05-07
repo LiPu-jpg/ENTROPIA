@@ -41,7 +41,7 @@ def submit_train(mode: str, exp_id: str, seed: int = 42) -> int:
 #SBATCH --gres=gpu:4
 #SBATCH --cpus-per-task=32
 #SBATCH --mem=256G
-#SBATCH --time=12:00:00
+#SBATCH --time=24:00:00
 #SBATCH --output={PROJ}/logs/{exp_id}_%j.out
 #SBATCH --error={PROJ}/logs/{exp_id}_%j.err
 
