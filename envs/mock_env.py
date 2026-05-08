@@ -233,7 +233,32 @@ class MockTauEnv:
         "think": "(Internal reasoning recorded)",
         "transfer_to_human_agents": "Transferring to human agent...",
         "respond": "###STOP###",
-    }
+}
+
+def _smart_split(text: str, sep: str) -> List[str]:
+    parts = []
+    current = []
+    depth_bracket = 0
+    depth_brace = 0
+    in_quote = None
+    for ch in text:
+        if ch == in_quote:
+            in_quote = None
+        elif in_quote is None and ch in ('"', "'"):
+            in_quote = ch
+        elif in_quote is None:
+            if ch == "[": depth_bracket += 1
+            elif ch == "]": depth_bracket -= 1
+            elif ch == "{": depth_brace += 1
+            elif ch == "}": depth_brace -= 1
+        if ch == sep and not in_quote and depth_bracket == 0 and depth_brace == 0:
+            parts.append("".join(current))
+            current = []
+        else:
+            current.append(ch)
+    if current:
+        parts.append("".join(current))
+    return parts
 
     def __init__(self, task: Task):
         self.task = task

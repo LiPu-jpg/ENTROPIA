@@ -28,7 +28,7 @@ EXP_MATRIX = [
 ]
 
 MODEL = "/mnt/home/user41/downloaded_models/Qwen/Qwen2.5-7B-Instruct"
-N_STEPS = 200
+N_STEPS = 100
 N_TEST = 200
 TEST_SEED = 123
 
