@@ -127,7 +127,34 @@ def _parse_python_value(s: str) -> Any:
     return s
 
 
-def _smart_split(text: str, sep: str) -> List[str]:
+# ─── 参数格式检查 ───
+
+PARAM_PATTERNS = {
+    "order_id": r"^#W\d+$",
+    "reservation_id": r"^[A-Z0-9]{6}$",
+    "email": r"^[a-z.]+@example\.com$",
+    "zip": r"^\d{5}$",
+    "product_id": r"^\d+$",
+    "payment_method_id": r"^(credit_card|paypal|gift_card)_\d+$",
+    "user_id": r"^[a-z_]+$",
+    "item_ids": r"^\[.*\]$|^\d+$",
+    "new_item_ids": r"^\[.*\]$|^\d+$",
+    "first_name": r"^[A-Z][a-z]+$",
+    "last_name": r"^[A-Z][a-z]+$",
+    "cabin": r"^[a-z_]+$",
+}
+
+
+def _check_param_format(param_name: str, value) -> bool:
+    if not value:
+        return False
+    pattern = PARAM_PATTERNS.get(param_name)
+    if not pattern:
+        return isinstance(value, (str, int, float, bool, list))
+    s = str(value)
+    if isinstance(value, list) and all(isinstance(v, str) for v in value):
+        s = "[" + ",".join(value) + "]"
+    return bool(re.match(pattern, s))
     """按分隔符分割，同时处理嵌套的括号和引号。"""
     parts = []
     current = []
@@ -248,43 +275,57 @@ class MockTauEnv:
         )
 
     def _compute_reward(self) -> float:
-        """
-        二进制任务成功奖励。
-
-        检查：
-        1. 所有真实非 respond 动作都已被执行。
-        2. 如果任务有 outputs，至少有一个输出字符串出现在回复中。
-        """
-        gt_non_respond = [
-            a
-            for a in self.gt_actions
-            if a.name not in ("respond", "transfer_to_human_agents")
-        ]
-
-        if not gt_non_respond:
+        gt_actions = [a for a in self.gt_actions
+                      if a.name not in ("respond", "transfer_to_human_agents", "think")]
+        if not gt_actions:
             return 1.0
 
-        # 检查每个所需动作都已被执行（按名称匹配）
-        taken_names = {a.name for a in self.taken_actions}
-        all_actions_taken = all(gt.name in taken_names for gt in gt_non_respond)
+        taken = [a for a in self.taken_actions
+                 if a.name not in ("respond", "transfer_to_human_agents", "think")]
 
-        if not all_actions_taken:
-            return 0.0
+        # L1: 工具名命中 (0.50)
+        gt_names = {a.name for a in gt_actions}
+        taken_names = {a.name for a in taken}
+        hit = sum(1 for n in gt_names if n in taken_names)
+        l1 = 0.50 * hit / len(gt_names)
 
-        # 检查 outputs（如果有的话）
-        if self.task.outputs:
-            respond_texts = [
-                a.kwargs.get("content", "")
-                for a in self.taken_actions
-                if a.name == "respond"
-            ]
-            all_responses = " ".join(respond_texts).lower()
+        # L2: 参数非空 (0.30)
+        non_empty, total_params = 0, 0
+        for gt in gt_actions:
+            for k in gt.kwargs:
+                total_params += 1
+                for t in taken:
+                    if t.name == gt.name and k in t.kwargs:
+                        val = t.kwargs[k]
+                        if val and (not isinstance(val, list) or len(val) > 0):
+                            non_empty += 1
+                        break
+        l2 = 0.30 * non_empty / max(1, total_params)
 
-            for output in self.task.outputs:
-                if output.lower() not in all_responses:
-                    return 0.0
+        # L3: 参数格式 (0.15)
+        fmt_ok, fmt_tot = 0, 0
+        for t in taken:
+            for k, v in t.kwargs.items():
+                fmt_tot += 1
+                if _check_param_format(k, v):
+                    fmt_ok += 1
+        l3 = 0.15 * fmt_ok / max(1, fmt_tot)
 
-        return 1.0
+        # L4: 多余/重复惩罚 (0.05)
+        extra = sum(1 for t in taken if t.name not in gt_names)
+        seen = {}
+        for t in taken:
+            seen[t.name] = seen.get(t.name, 0) + 1
+        duplicate = 0
+        for gt in gt_actions:
+            expected = sum(1 for g in gt_actions if g.name == gt.name)
+            actual = seen.get(gt.name, 0)
+            if actual > expected:
+                duplicate += 1
+        penalty = min(0.05, 0.01 * (extra + duplicate))
+        l4 = 0.05 - penalty
+
+        return min(1.0, l1 + l2 + l3 + l4)
 
 
 def create_mock_env(task: Task) -> MockTauEnv:
