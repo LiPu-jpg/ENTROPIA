@@ -281,51 +281,62 @@ class MockTauEnv:
                       if a.name not in ("respond", "transfer_to_human_agents", "think")]
         if not gt_actions:
             return 1.0
-
         taken = [a for a in self.taken_actions
                  if a.name not in ("respond", "transfer_to_human_agents", "think")]
 
-        # L1: 工具名命中 (0.50)
+        # L1: 工具名 (0.10) — SFT 已背熟，当保底
         gt_names = {a.name for a in gt_actions}
         taken_names = {a.name for a in taken}
         hit = sum(1 for n in gt_names if n in taken_names)
-        l1 = 0.50 * hit / len(gt_names)
+        l1 = 0.10 * hit / len(gt_names)
 
-        # L2: 参数非空 (0.30)
-        non_empty, total_params = 0, 0
+        # L2: 参数匹配 (0.50) — 比 GT 参数值
+        score_params = 0.0
         for gt in gt_actions:
-            for k in gt.kwargs:
-                total_params += 1
+            for k, gt_val in gt.kwargs.items():
                 for t in taken:
-                    if t.name == gt.name and k in t.kwargs:
-                        val = t.kwargs[k]
-                        if val and (not isinstance(val, list) or len(val) > 0):
-                            non_empty += 1
-                        break
-        l2 = 0.30 * non_empty / max(1, total_params)
+                    if t.name != gt.name or k not in t.kwargs:
+                        continue
+                    val = t.kwargs[k]
+                    got = 0.0
+                    if isinstance(gt_val, list) and isinstance(val, list):
+                        if len(val) == len(gt_val):
+                            got = 0.6
+                        elif len(val) > 0:
+                            got = 0.3
+                    elif isinstance(val, str):
+                        if val == str(gt_val):
+                            got = 1.0
+                        elif len(val) >= 3 and _check_param_format(k, val):
+                            got = 0.5
+                        elif val:
+                            got = 0.2
+                    elif val:
+                        got = 0.3
+                    score_params += got
+                    break
+        max_possible = sum(len(gt.kwargs) for gt in gt_actions)
+        l2 = 0.50 * score_params / max(1, max_possible)
 
-        # L3: 参数格式 (0.15)
-        fmt_ok, fmt_tot = 0, 0
-        for t in taken:
-            for k, v in t.kwargs.items():
-                fmt_tot += 1
-                if _check_param_format(k, v):
-                    fmt_ok += 1
-        l3 = 0.15 * fmt_ok / max(1, fmt_tot)
-
-        # L4: 多余/重复惩罚 (0.05)
-        extra = sum(1 for t in taken if t.name not in gt_names)
-        seen = {}
-        for t in taken:
-            seen[t.name] = seen.get(t.name, 0) + 1
-        duplicate = 0
+        # L3: 无多余/重复 (0.25)
+        gt_name_counts = {}
         for gt in gt_actions:
-            expected = sum(1 for g in gt_actions if g.name == gt.name)
-            actual = seen.get(gt.name, 0)
-            if actual > expected:
-                duplicate += 1
-        penalty = min(0.05, 0.01 * (extra + duplicate))
-        l4 = 0.05 - penalty
+            gt_name_counts[gt.name] = gt_name_counts.get(gt.name, 0) + 1
+        taken_counts = {}
+        extra_penalty = 0.0
+        for t in taken:
+            taken_counts[t.name] = taken_counts.get(t.name, 0) + 1
+            expected = gt_name_counts.get(t.name, 0)
+            if taken_counts[t.name] > expected:
+                extra_penalty += 0.05
+            if t.name not in gt_name_counts:
+                extra_penalty += 0.10
+        l3 = max(0.0, 0.25 - min(0.25, extra_penalty))
+
+        # L4: respond 质量 (0.15) — 是否有 respond 结束
+        has_respond = any(t.name == "respond" or t.name == "transfer_to_human_agents"
+                          for t in self.taken_actions)
+        l4 = 0.15 if has_respond else 0.0
 
         return min(1.0, l1 + l2 + l3 + l4)
 
