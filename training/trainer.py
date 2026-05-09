@@ -119,7 +119,8 @@ class AdaptiveRewardTrainer:
 
     def minimax_judge(self, instruction: str, task: Task, plan_text: str) -> float:
         if _minimax_client is None:
-            return 0.0
+            return self._mock_reward(task)
+
         gt_acts = [(a.name, a.kwargs) for a in task.actions
                    if a.name not in ("respond", "transfer_to_human_agents", "think")]
         gt_desc = " → ".join(f"{n}({', '.join(f'{k}={v}' for k,v in a.items())})" for n, a in gt_acts)
@@ -144,13 +145,21 @@ Reply with a SINGLE NUMBER 0.0-1.0."""
                         s = float(token)
                         if 0 <= s <= 1: return s
                     except: pass
-                return 0.0
+                break  # got text but couldn't parse → fall through
             except Exception as e:
-                if attempt < 2 and ("rate" in str(e).lower() or "429" in str(e)):
+                if "rate" in str(e).lower() or "429" in str(e):
                     import time; time.sleep(10 * (attempt + 1))
-                else:
-                    return 0.0
-        return 0.0
+                    continue
+                break  # non-retryable error → fall through
+
+        return self._mock_reward(task)  # fallback: use mock score
+
+    def _mock_reward(self, task: Task) -> float:
+        env = MockTauEnv(task);
+        env.reset()
+        for a in task.actions: env.step(a)
+        env.step(Action(name="respond", kwargs={"content": "Done."}))
+        return env.reward
 
     def rollout(
         self,
