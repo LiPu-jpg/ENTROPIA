@@ -240,13 +240,13 @@ ABLATION_PRESETS = {
     "router_r2": lambda **kw: TrainingConfig(
         reward_mode="router", use_router=True,
         router_reliability_variant="R2",
-        router_reliability={"variant": "R2", "window_size": 50, "temp_L": 1.0},
+        router_reliability={"window_size": 50, "temp_L": 1.0},
         **kw,
     ),
     "router_r3": lambda **kw: TrainingConfig(
         reward_mode="router", use_router=True,
         router_reliability_variant="R3",
-        router_reliability={"variant": "R3", "window_size": 50, "temp_L": 1.0, "a": 0.4, "b": 0.3},
+        router_reliability={"window_size": 50, "temp_L": 1.0},
         **kw,
     ),
 }
