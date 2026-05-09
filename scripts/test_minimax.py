@@ -137,20 +137,25 @@ if __name__ == "__main__":
     print(f"Loading test set ({args.n} tasks)...", flush=True)
     tasks = load_tau_bench_dataset(n_samples=args.n, split="eval", seed=9999, use_simia=True).tasks
 
-    # Find all checkpoints from the latest run
+    # Find latest checkpoint per mode, 7B only (skip old 1.5B)
     cp_dirs = {}
-    for cp in sorted(glob.glob("outputs/quick_*/checkpoint_best")):
-        cp_dir = os.path.dirname(cp)
-        mode = cp_dir.split("/")[1].replace("quick_", "")
-        cp_dirs[mode] = cp
+    targets = ["sparse", "adaptive", "router", "router_r2", "router_r3"]
+    for mode in targets:
+        matches = sorted(glob.glob(f"outputs/quick_{mode}_*/checkpoint_best"))
+        if matches:
+            cp_dirs[mode] = matches[-1]  # latest one
 
     results = {}
     for mode, cp in sorted(cp_dirs.items()):
         print(f"\n=== {mode} ({cp}) ===", flush=True)
-        m = PeftModel.from_pretrained(
-            AutoModelForCausalLM.from_pretrained(BASE, torch_dtype=torch.bfloat16, device_map="auto", trust_remote_code=True),
-            cp,
-        ).eval()
+        try:
+            m = PeftModel.from_pretrained(
+                AutoModelForCausalLM.from_pretrained(BASE, torch_dtype=torch.bfloat16, device_map="auto", trust_remote_code=True),
+                cp,
+            ).eval()
+        except Exception as e:
+            print(f"  SKIP: load error ({str(e)[:80]})", flush=True)
+            continue
         avg = test_one(m, tok, tasks, mode, args.n)
         results[mode] = round(avg, 4)
         del m; torch.cuda.empty_cache()
