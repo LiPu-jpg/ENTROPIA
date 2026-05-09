@@ -18,17 +18,15 @@ OUTDIR = f"{PROJ}/outputs"
 RESULTS = f"{PROJ}/outputs/exp_results.json"
 
 EXP_MATRIX = [
-    {"id":"B0_sparse","mode":"sparse","priority":1,"label":"Sparse GRPO baseline"},
-    {"id":"B1_dense","mode":"dense_igpo","priority":1,"label":"Fixed Dense IG (IGPO)"},
+    {"id":"B0_sparse","mode":"sparse","priority":1,"label":"Sparse GRPO (ReTool)"},
     {"id":"B4_v1","mode":"adaptive","priority":1,"label":"ENTROPIA v1 entropy-gate"},
-    {"id":"B5_random","mode":"random_gate","priority":1,"label":"Random Gate sanity"},
-    {"id":"M1_router","mode":"router","priority":1,"label":"ENTROPIA v2 NUR-R1 (additive)"},
-    {"id":"M2_router_r2","mode":"router_r2","priority":1,"label":"ENTROPIA v2 NUR-R2 (multiply)"},
-    {"id":"M3_router_r3","mode":"router_r3","priority":1,"label":"ENTROPIA v2 NUR-R3 (softmax)"},
+    {"id":"M1_router","mode":"router","priority":1,"label":"v2 NUR-R1 additive"},
+    {"id":"M2_router_r2","mode":"router_r2","priority":1,"label":"v2 NUR-R2 multiplicative"},
+    {"id":"M3_router_r3","mode":"router_r3","priority":1,"label":"v2 NUR-R3 softmax"},
 ]
 
 MODEL = "/mnt/home/user41/downloaded_models/Qwen/Qwen2.5-7B-Instruct"
-N_STEPS = 100
+N_STEPS = 80
 N_TEST = 200
 TEST_SEED = 123
 

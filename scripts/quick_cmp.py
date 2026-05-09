@@ -147,7 +147,7 @@ def run_single(mode: str, model_name: str, seed: int, n_steps: int = 200) -> dic
     eval_tasks = load_tau_bench_dataset(
         n_samples=50,
         split="eval",
-        seed=config.seed + 1,
+        seed=config.seed + 999,  # 完全不同种子，减少同分布 overlap
         use_simia=True,
     ).tasks
 
