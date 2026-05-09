@@ -24,6 +24,15 @@ from envs.mock_env import MockTauEnv, parse_action_from_text, Action
 from core.signal_bank import SignalBank, SignalBatch
 from core.reward_router import RewardRouter, NeedGate, UtilityGate, ReliabilityGate, RiskController
 
+try:
+    from openai import OpenAI
+    _minimax_client = OpenAI(
+        base_url="https://api.minimaxi.com/v1",
+        api_key="sk-cp-xqBXPT7PTX8CG_IMl3xnbrrVi50i1wEjBQ8AACpgDhR3wpD6BJeTsYrBt2J9CJSMy9weFfPUQHJ6DWYMXqvD6Whvszor2IZhc_jACOJXGx3QbcygaiIFgLo",
+    )
+except:
+    _minimax_client = None
+
 
 class AdaptiveRewardTrainer:
     def __init__(
@@ -107,6 +116,41 @@ class AdaptiveRewardTrainer:
         )
         trainer.train()
         return trainer.state.best_metric
+
+    def minimax_judge(self, instruction: str, task: Task, plan_text: str) -> float:
+        if _minimax_client is None:
+            return 0.0
+        gt_acts = [(a.name, a.kwargs) for a in task.actions
+                   if a.name not in ("respond", "transfer_to_human_agents", "think")]
+        gt_desc = " → ".join(f"{n}({', '.join(f'{k}={v}' for k,v in a.items())})" for n, a in gt_acts)
+        prompt = f"""Judge the agent's task execution.
+
+SCORING: 1.0=exact match, 0.8=right tools/wrong params, 0.6=most tools ok, 0.4=some tools, 0.2=barely, 0.0=nothing.
+
+TASK: {instruction[:300]}
+GROUND TRUTH: {gt_desc}
+AGENT: {plan_text[:400]}
+
+Reply with a SINGLE NUMBER 0.0-1.0."""
+        for attempt in range(3):
+            try:
+                r = _minimax_client.chat.completions.create(
+                    model="MiniMax-M2.7", messages=[{"role":"user","content":prompt}],
+                    max_tokens=10, temperature=0.0,
+                )
+                text = r.choices[0].message.content.strip()
+                for token in text.replace(",",".").split():
+                    try:
+                        s = float(token)
+                        if 0 <= s <= 1: return s
+                    except: pass
+                return 0.0
+            except Exception as e:
+                if attempt < 2 and ("rate" in str(e).lower() or "429" in str(e)):
+                    import time; time.sleep(10 * (attempt + 1))
+                else:
+                    return 0.0
+        return 0.0
 
     def rollout(
         self,
@@ -219,11 +263,11 @@ class AdaptiveRewardTrainer:
                 step_token_ids.append([])
 
             if result.done:
-                outcome = result.reward
                 break
         else:
-            result = env.step(Action(name="respond", kwargs={"content": "Done."}))
-            outcome = result.reward
+            env.step(Action(name="respond", kwargs={"content": "Done."}))
+
+        outcome = self.minimax_judge(instruction, task, plan_text)
 
         return (trajectory, outcome, step_entropies, step_token_ids)
 

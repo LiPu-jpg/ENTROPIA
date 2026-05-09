@@ -33,20 +33,26 @@ def judge_with_minimax(instruction: str, gt_actions: list, agent_actions: list) 
     gt_desc = " → ".join(f"{n}({', '.join(f'{k}={v}' for k,v in a.items())})" for n, a in gt_actions)
     agent_desc = " → ".join(str(a) for a in agent_actions)
 
-    prompt = f"""Task: {instruction}
+    prompt = f"""Judge the agent's task execution. Compare with ground truth below.
 
-Ground truth actions: {gt_desc}
+===== SCORING RUBRIC =====
+1.0: Agent called EXACTLY the same tools with SAME parameters as ground truth, in correct logical order.
+0.8: Agent called correct tools but some parameter values differ (e.g. wrong order_id).
+0.6: Agent called most required tools but missed 1-2, or has one extra unnecessary action.
+0.4: Agent called some correct tools but missed several major ones.
+0.2: Agent barely attempted, wrong order of actions, wrong tools.
+0.0: Agent did nothing relevant or completely wrong.
 
-Agent actions: {agent_desc}
+===== TASK =====
+{instruction}
 
-Score how well the agent completed the task (0.0 to 1.0):
-- 1.0: All correct actions in right order, correct parameters
-- 0.7-0.9: Correct actions but some parameters wrong or missing
-- 0.4-0.6: Major actions present but incomplete or extra wrong steps
-- 0.1-0.3: Only partially started the task
-- 0.0: Completely wrong or irrelevant
+===== GROUND TRUTH (correct answer) =====
+{gt_desc}
 
-Reply with ONLY a number like 0.75, no explanation."""
+===== AGENT EXECUTION =====
+{agent_desc}
+
+Reply with a SINGLE NUMBER between 0.0 and 1.0. No text."""
 
     for attempt in range(3):
         try:
