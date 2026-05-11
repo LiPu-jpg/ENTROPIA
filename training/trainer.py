@@ -693,9 +693,11 @@ Reply with a SINGLE NUMBER 0.0-1.0."""
             if step % self.config.log_interval == 0:
                 if self.config.wandb_project:
                     wandb.log(stats)
+                avg_outcome = sum(all_outcomes) / max(1, len(all_outcomes))
                 print(
                     f"Step {step}: loss={stats['loss']:.3f}, "
-                    f"succ={stats['success_rate']:.3f}",
+                    f"succ={stats['success_rate']:.3f}, "
+                    f"avg_score={avg_outcome:.3f}",
                     flush=True,
                 )
 
