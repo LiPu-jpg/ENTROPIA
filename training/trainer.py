@@ -117,9 +117,52 @@ class AdaptiveRewardTrainer:
         trainer.train()
         return trainer.state.best_metric
 
+    _mm_call_count = 0
+
     def minimax_judge(self, instruction: str, task: Task, plan_text: str) -> float:
         if _minimax_client is None:
             return self._mock_reward(task)
+
+        self._mm_call_count += 1
+        gt_acts = [(a.name, a.kwargs) for a in task.actions
+                   if a.name not in ("respond", "transfer_to_human_agents", "think")]
+        gt_desc = " → ".join(f"{n}({', '.join(f'{k}={v}' for k,v in a.items())})" for n, a in gt_acts)
+        prompt = f"""Judge the agent's task execution.
+
+SCORING: 1.0=exact match, 0.8=right tools/wrong params, 0.6=most tools ok, 0.4=some tools, 0.2=barely, 0.0=nothing.
+
+TASK: {instruction[:300]}
+GROUND TRUTH: {gt_desc}
+AGENT: {plan_text[:400]}
+
+Reply with a SINGLE NUMBER 0.0-1.0."""
+        for attempt in range(3):
+            try:
+                r = _minimax_client.chat.completions.create(
+                    model="MiniMax-M2.7", messages=[{"role":"user","content":prompt}],
+                    max_tokens=10, temperature=0.0,
+                )
+                text = r.choices[0].message.content.strip()
+                for token in text.replace(",",".").split():
+                    try:
+                        s = float(token)
+                        if 0 <= s <= 1:
+                            if self.global_step > 0 and self._mm_call_count % 20 == 0:
+                                print(f"  [MM #{self._mm_call_count}] score={s:.3f} plan={plan_text[:60]}", flush=True)
+                            return s
+                    except: pass
+                s = self._mock_reward(task)
+                print(f"  [MM #{self._mm_call_count}] PARSE FAIL '{text[:50]}' → mock={s:.2f}", flush=True)
+                return s
+            except Exception as e:
+                if "rate" in str(e).lower() or "429" in str(e):
+                    import time; time.sleep(10 * (attempt + 1))
+                    continue
+                break
+
+        s = self._mock_reward(task)
+        print(f"  [MM #{self._mm_call_count}] API ERROR → fallback mock={s:.2f}", flush=True)
+        return s
 
         gt_acts = [(a.name, a.kwargs) for a in task.actions
                    if a.name not in ("respond", "transfer_to_human_agents", "think")]
