@@ -127,32 +127,40 @@ class AdaptiveRewardTrainer:
         gt_acts = [(a.name, a.kwargs) for a in task.actions
                    if a.name not in ("respond", "transfer_to_human_agents", "think")]
         gt_desc = " → ".join(f"{n}({', '.join(f'{k}={v}' for k,v in a.items())})" for n, a in gt_acts)
-        prompt = f"""Judge the agent's task execution.
+        prompt = f"""Score: 0.0-1.0. No explanation. Just the number.
 
-SCORING: 1.0=exact match, 0.8=right tools/wrong params, 0.6=most tools ok, 0.4=some tools, 0.2=barely, 0.0=nothing.
+TASK: {instruction[:200]}
+GT: {gt_desc}
+AG: {plan_text[:300]}
 
-TASK: {instruction[:300]}
-GROUND TRUTH: {gt_desc}
-AGENT: {plan_text[:400]}
-
-Reply with a SINGLE NUMBER 0.0-1.0."""
+Score:"""
         for attempt in range(3):
             try:
                 r = _minimax_client.chat.completions.create(
                     model="MiniMax-M2.7", messages=[{"role":"user","content":prompt}],
-                    max_tokens=10, temperature=0.0,
+                    max_tokens=50, temperature=0.0,
                 )
                 text = r.choices[0].message.content.strip()
-                for token in text.replace(",",".").split():
+                import re
+                numbers = re.findall(r'(\d+\.?\d*)', text)
+                for num_str in numbers:
                     try:
-                        s = float(token)
-                        if 0 <= s <= 1:
-                            if self.global_step > 0 and self._mm_call_count % 20 == 0:
-                                print(f"  [MM #{self._mm_call_count}] score={s:.3f} plan={plan_text[:60]}", flush=True)
+                        s = float(num_str)
+                        if 0.3 <= s <= 1.0:
+                            if self._mm_call_count % 20 == 0:
+                                print(f"  [MM #{self._mm_call_count}] score={s:.3f}", flush=True)
+                            return s
+                    except: pass
+                # Last resort: just take any number in text
+                for num_str in numbers:
+                    try:
+                        s = float(num_str)
+                        if 0.0 <= s <= 1.0:
                             return s
                     except: pass
                 s = self._mock_reward(task)
-                print(f"  [MM #{self._mm_call_count}] PARSE FAIL '{text[:50]}' → mock={s:.2f}", flush=True)
+                if self._mm_call_count % 20 == 0:
+                    print(f"  [MM #{self._mm_call_count}] PARSE FAIL → mock={s:.2f}", flush=True)
                 return s
             except Exception as e:
                 if "rate" in str(e).lower() or "429" in str(e):
