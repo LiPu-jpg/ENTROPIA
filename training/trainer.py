@@ -24,14 +24,20 @@ from envs.mock_env import MockTauEnv, parse_action_from_text, Action
 from core.signal_bank import SignalBank, SignalBatch
 from core.reward_router import RewardRouter, NeedGate, UtilityGate, ReliabilityGate, RiskController
 
-try:
-    from openai import OpenAI
-    _minimax_client = OpenAI(
-        base_url="https://api.minimaxi.com/v1",
-        api_key="sk-cp-xqBXPT7PTX8CG_IMl3xnbrrVi50i1wEjBQ8AACpgDhR3wpD6BJeTsYrBt2J9CJSMy9weFfPUQHJ6DWYMXqvD6Whvszor2IZhc_jACOJXGx3QbcygaiIFgLo",
-    )
-except:
-    _minimax_client = None
+_mm_client = None
+
+def _get_mm_client():
+    global _mm_client
+    if _mm_client is None:
+        try:
+            from openai import OpenAI
+            _mm_client = OpenAI(
+                base_url="https://api.minimaxi.com/v1",
+                api_key="sk-cp-xqBXPT7PTX8CG_IMl3xnbrrVi50i1wEjBQ8AACpgDhR3wpD6BJeTsYrBt2J9CJSMy9weFfPUQHJ6DWYMXqvD6Whvszor2IZhc_jACOJXGx3QbcygaiIFgLo",
+            )
+        except:
+            _mm_client = None
+    return _mm_client
 
 
 class AdaptiveRewardTrainer:
@@ -120,7 +126,8 @@ class AdaptiveRewardTrainer:
     _mm_call_count = 0
 
     def minimax_judge(self, instruction: str, task: Task, plan_text: str) -> float:
-        if _minimax_client is None:
+        mm = _get_mm_client()
+        if mm is None:
             return self._mock_reward(task)
 
         self._mm_call_count += 1
@@ -136,7 +143,7 @@ AG: {plan_text[:300]}
 Score:"""
         for attempt in range(3):
             try:
-                r = _minimax_client.chat.completions.create(
+                r = mm.chat.completions.create(
                     model="MiniMax-M2.7", messages=[{"role":"user","content":prompt}],
                     max_tokens=50, temperature=0.0,
                 )
@@ -186,7 +193,7 @@ AGENT: {plan_text[:400]}
 Reply with a SINGLE NUMBER 0.0-1.0."""
         for attempt in range(3):
             try:
-                r = _minimax_client.chat.completions.create(
+                r = mm.chat.completions.create(
                     model="MiniMax-M2.7", messages=[{"role":"user","content":prompt}],
                     max_tokens=10, temperature=0.0,
                 )
