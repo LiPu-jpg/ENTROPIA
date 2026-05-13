@@ -134,83 +134,41 @@ class AdaptiveRewardTrainer:
         gt_acts = [(a.name, a.kwargs) for a in task.actions
                    if a.name not in ("respond", "transfer_to_human_agents", "think")]
         gt_desc = " → ".join(f"{n}({', '.join(f'{k}={v}' for k,v in a.items())})" for n, a in gt_acts)
-        prompt = f"""Score: 0.0-1.0. No explanation. Just the number.
-
-TASK: {instruction[:200]}
-GT: {gt_desc}
-AG: {plan_text[:300]}
-
-Score:"""
+        prompt = f"Task:{instruction[:200]}\nGT:{gt_desc}\nAG:{plan_text[:300]}\nScore:"
         for attempt in range(3):
             try:
                 r = mm.chat.completions.create(
-                    model="MiniMax-M2.7", messages=[{"role":"user","content":prompt}],
-                    max_tokens=50, temperature=0.0,
+                    model="MiniMax-M2.7",
+                    messages=[
+                        {"role": "system", "content": "Score agents 0.0-1.0. Output ONLY one number. No text."},
+                        {"role": "user", "content": prompt},
+                    ],
+                    max_tokens=500, temperature=0.0,
                 )
                 text = r.choices[0].message.content.strip()
+                after = text.split("</think>")[-1].strip() if "</think>" in text else text
                 import re
-                numbers = re.findall(r'(\d+\.?\d*)', text)
-                for num_str in numbers:
+                nums = re.findall(r'\b(0\.\d+|1\.0|1)\b', after)
+                for n in nums:
                     try:
-                        s = float(num_str)
-                        if 0.3 <= s <= 1.0:
+                        s = float(n)
+                        if 0.0 <= s <= 1.0:
                             if self._mm_call_count % 20 == 0:
                                 print(f"  [MM #{self._mm_call_count}] score={s:.3f}", flush=True)
                             return s
                     except: pass
-                # Last resort: just take any number in text
-                for num_str in numbers:
-                    try:
-                        s = float(num_str)
-                        if 0.0 <= s <= 1.0:
-                            return s
-                    except: pass
                 s = self._mock_reward(task)
                 if self._mm_call_count % 20 == 0:
-                    print(f"  [MM #{self._mm_call_count}] PARSE FAIL → mock={s:.2f}", flush=True)
+                    print(f"  [MM #{self._mm_call_count}] PARSE → mock={s:.2f}", flush=True)
                 return s
             except Exception as e:
                 if "rate" in str(e).lower() or "429" in str(e):
                     import time; time.sleep(10 * (attempt + 1))
                     continue
                 break
-
         s = self._mock_reward(task)
-        print(f"  [MM #{self._mm_call_count}] API ERROR → fallback mock={s:.2f}", flush=True)
+        print(f"  [MM #{self._mm_call_count}] API ERR → mock={s:.2f}", flush=True)
         return s
-
-        gt_acts = [(a.name, a.kwargs) for a in task.actions
-                   if a.name not in ("respond", "transfer_to_human_agents", "think")]
-        gt_desc = " → ".join(f"{n}({', '.join(f'{k}={v}' for k,v in a.items())})" for n, a in gt_acts)
-        prompt = f"""Judge the agent's task execution.
-
-SCORING: 1.0=exact match, 0.8=right tools/wrong params, 0.6=most tools ok, 0.4=some tools, 0.2=barely, 0.0=nothing.
-
-TASK: {instruction[:300]}
-GROUND TRUTH: {gt_desc}
-AGENT: {plan_text[:400]}
-
-Reply with a SINGLE NUMBER 0.0-1.0."""
-        for attempt in range(3):
-            try:
-                r = mm.chat.completions.create(
-                    model="MiniMax-M2.7", messages=[{"role":"user","content":prompt}],
-                    max_tokens=10, temperature=0.0,
-                )
-                text = r.choices[0].message.content.strip()
-                for token in text.replace(",",".").split():
-                    try:
-                        s = float(token)
-                        if 0 <= s <= 1: return s
-                    except: pass
-                break  # got text but couldn't parse → fall through
-            except Exception as e:
-                if "rate" in str(e).lower() or "429" in str(e):
-                    import time; time.sleep(10 * (attempt + 1))
-                    continue
-                break  # non-retryable error → fall through
-
-        return self._mock_reward(task)  # fallback: use mock score
 
     def _mock_reward(self, task: Task) -> float:
         env = MockTauEnv(task);
