@@ -157,6 +157,7 @@ def run_single(mode: str, model_name: str, seed: int, n_steps: int = 200) -> dic
         train_dataset=train_dataset,
         eval_tasks=eval_tasks,
         sft_dataset=sft_dataset,
+        sft_checkpoint=args.sft_checkpoint if args.sft_checkpoint else None,
     )
 
     return {
@@ -188,6 +189,7 @@ if __name__ == "__main__":
     )
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--n_steps", type=int, default=200)
+    parser.add_argument("--sft_checkpoint", type=str, default="")
     args = parser.parse_args()
 
     print(

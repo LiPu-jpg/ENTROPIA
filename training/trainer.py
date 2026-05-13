@@ -13,9 +13,9 @@ import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from transformers import AutoModelForCausalLM, AutoTokenizer
-from peft import LoraConfig, get_peft_model
+from peft import LoraConfig, get_peft_model, PeftModel
 from typing import List, Dict, Optional, Tuple
-import copy
+import os, copy
 import wandb
 from pathlib import Path
 
@@ -658,8 +658,27 @@ class AdaptiveRewardTrainer:
                 successes += 1
         return successes / len(eval_tasks) if eval_tasks else 0.0
 
-    def train(self, train_dataset, eval_tasks: List[Task], sft_dataset=None):
-        self.setup_model()
+    def train(self, train_dataset, eval_tasks: List[Task], sft_dataset=None, sft_checkpoint: str = None):
+        if sft_checkpoint and os.path.exists(sft_checkpoint):
+            from peft import PeftModel
+            self.tokenizer = AutoTokenizer.from_pretrained(sft_checkpoint)
+            if self.tokenizer.pad_token is None:
+                self.tokenizer.pad_token = self.tokenizer.eos_token
+            base = AutoModelForCausalLM.from_pretrained(
+                self.config.model_name, torch_dtype=getattr(torch, self.config.model_dtype),
+                device_map="auto", trust_remote_code=True,
+            )
+            self.model = PeftModel.from_pretrained(base, sft_checkpoint)
+            self.model.train()
+            self.device = self.model.device
+            self.ref_model = copy.deepcopy(self.model)
+            self.ref_model.eval()
+            for p in self.ref_model.parameters(): p.requires_grad = False
+            self.config.sft_warmup_epochs = 0  # skip SFT
+            print(f"Loaded SFT checkpoint from {sft_checkpoint}, skipping warmup", flush=True)
+        else:
+            self.setup_model()
+
         self.optimizer = torch.optim.AdamW(
             self.model.parameters(),
             lr=self.config.rl_learning_rate,
@@ -672,13 +691,19 @@ class AdaptiveRewardTrainer:
                 flush=True,
             )
             self.sft_warmup(sft_data)
-            import copy
 
             self.ref_model = copy.deepcopy(self.model)
             self.ref_model.eval()
             for param in self.ref_model.parameters():
                 param.requires_grad = False
             print("SFT warmup done, ref_model updated", flush=True)
+
+            # 保存 SFT checkpoint 供后续跳过
+            sft_path = Path(self.config.output_dir) / "sft_checkpoint"
+            sft_path.mkdir(parents=True, exist_ok=True)
+            self.model.save_pretrained(sft_path)
+            self.tokenizer.save_pretrained(sft_path)
+            print(f"SFT checkpoint saved to {sft_path}", flush=True)
 
         train_loader = DataLoader(
             train_dataset,
