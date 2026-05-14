@@ -86,8 +86,6 @@ Reply with a SINGLE NUMBER between 0.0 and 1.0. No text."""
                 else:
                     return 0.0
     return 0.0
-                    print(f"  API error (skipping): {str(e)[:80]}", flush=True)
-                    return 0.0
 
 
 def test_one(model, tok, tasks, name: str, n: int = 50):
