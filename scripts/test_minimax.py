@@ -58,20 +58,23 @@ Reply with a SINGLE NUMBER between 0.0 and 1.0. No text."""
         try:
             r = client.chat.completions.create(
                 model="MiniMax-M2.7",
-                messages=[{"role": "user", "content": prompt}],
-                max_tokens=20,
-                temperature=0.0,
+                messages=[
+                    {"role": "system", "content": "Score agents 0.0-1.0. Output ONLY one number. No text."},
+                    {"role": "user", "content": f"Task:{instruction[:200]}\nGT:{gt_desc}\nAG:{agent_desc}\nScore:"},
+                ],
+                max_tokens=500, temperature=0.0,
             )
             text = r.choices[0].message.content.strip()
-            for token in text.replace(",", ".").split():
+            after = text.split("</think>")[-1].strip() if "</think>" in text else text
+            import re
+            nums = re.findall(r'\b(0\.\d+|1\.0|1)\b', after)
+            for n in nums:
                 try:
-                    score = float(token)
-                    if 0 <= score <= 1:
-                        return score
-                except ValueError:
-                    pass
-            time.sleep(0.5)
-            return 0.0
+                    s = float(n)
+                    if 0.0 <= s <= 1.0:
+                        return s
+                except: pass
+            break
         except Exception as e:
             if "rate" in str(e).lower() or "429" in str(e):
                 wait = 30 * (attempt + 1)
