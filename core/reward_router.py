@@ -135,12 +135,20 @@ class ReliabilityGate:
         self._process_history = {
             "info_gain": deque(maxlen=self.window_size),
             "efficiency_cost": deque(maxlen=self.window_size),
+            "relevance": deque(maxlen=self.window_size),
         }
 
     def update(self, signal_name: str, process_sum: float, outcome: float):
         if signal_name not in self._process_history:
             self._process_history[signal_name] = deque(maxlen=self.window_size)
         self._process_history[signal_name].append(process_sum)
+        self._outcome_history.append(outcome)
+
+    def update_many(self, signal_sums: Dict[str, float], outcome: float):
+        for signal_name, process_sum in signal_sums.items():
+            if signal_name not in self._process_history:
+                self._process_history[signal_name] = deque(maxlen=self.window_size)
+            self._process_history[signal_name].append(process_sum)
         self._outcome_history.append(outcome)
 
     def _compute_stats(self, signal_name: str) -> Tuple[float, float, float, float]:

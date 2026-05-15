@@ -51,6 +51,11 @@ class AdaptiveRewardTrainer:
         self.hacking_detector = hacking_detector
         self.reward_router = reward_router
         self.signal_bank = signal_bank
+        if self.signal_bank is None and (
+            self.config.use_router
+            or self.config.reward_mode in ("adaptive", "dense_igpo", "dense_fixed", "random_gate")
+        ):
+            self.signal_bank = SignalBank(max_turns=self.config.max_turns)
 
         self.model = None
         self.ref_model = None
@@ -257,7 +262,9 @@ class AdaptiveRewardTrainer:
         outcome = 0.0
 
         for turn_idx, action_str in enumerate(action_strs[:max_turns]):
-            action = parse_action_from_text(action_str)
+            parsed_action = parse_action_from_text(action_str)
+            format_valid = parsed_action is not None
+            action = parsed_action
             if action is None:
                 action = Action(name="respond", kwargs={"content": action_str})
 
@@ -266,6 +273,9 @@ class AdaptiveRewardTrainer:
                 {
                     "turn": turn_idx,
                     "action": action_str,
+                    "action_name": action.name,
+                    "action_kwargs": action.kwargs,
+                    "format_valid": format_valid,
                     "observation": result.observation,
                     "done": result.done,
                 }
@@ -425,11 +435,48 @@ class AdaptiveRewardTrainer:
                     )
                     gate = torch.clamp(gate, min=self.config.adaptive.gate_min, max=1.0)
                     r_sparse = reward_matrix[q, g]
-                    r_adaptive = r_sparse + self.config.adaptive.alpha * gate * r_sparse
+                    idx = q * G + g
+                    r_dense = self._process_reward_vector(
+                        all_signals[idx] if all_signals and idx < len(all_signals) else None,
+                        component="composite",
+                    )
+                    r_adaptive = r_sparse + self.config.adaptive.alpha * gate * r_dense
                     gated.append(r_adaptive)
             reward_matrix = torch.stack(gated).reshape(-1, G, max_turns)
 
-        elif self.config.use_router and self.reward_router is not None:
+        elif self.config.reward_mode == "dense_igpo":
+            dense = []
+            for q in range(reward_matrix.shape[0]):
+                for g in range(reward_matrix.shape[1]):
+                    idx = q * G + g
+                    r_sparse = reward_matrix[q, g]
+                    r_dense = self._process_reward_vector(
+                        all_signals[idx] if all_signals and idx < len(all_signals) else None,
+                        component="info_gain",
+                    )
+                    dense.append(r_sparse + r_dense)
+            reward_matrix = torch.stack(dense).reshape(-1, G, max_turns)
+
+        elif self.config.reward_mode == "dense_fixed":
+            dense = []
+            for q in range(reward_matrix.shape[0]):
+                for g in range(reward_matrix.shape[1]):
+                    idx = q * G + g
+                    r_sparse = reward_matrix[q, g]
+                    r_dense = self._process_reward_vector(
+                        all_signals[idx] if all_signals and idx < len(all_signals) else None,
+                        component="composite",
+                    )
+                    dense.append(r_sparse + r_dense)
+            reward_matrix = torch.stack(dense).reshape(-1, G, max_turns)
+
+        elif (
+            self.config.use_router
+            and self.reward_router is not None
+            and self.config.reward_mode in (
+                "router", "router_need_only", "router_no_reliability", "router_no_risk"
+            )
+        ):
             gated = []
             for q in range(reward_matrix.shape[0]):
                 for g in range(reward_matrix.shape[1]):
@@ -472,13 +519,42 @@ class AdaptiveRewardTrainer:
             gated = []
             for q in range(reward_matrix.shape[0]):
                 for g in range(reward_matrix.shape[1]):
+                    idx = q * G + g
                     r_sparse = reward_matrix[q, g]
                     gate = random.random()
-                    r_rand = r_sparse + 0.5 * gate * r_sparse
+                    r_dense = self._process_reward_vector(
+                        all_signals[idx] if all_signals and idx < len(all_signals) else None,
+                        component="composite",
+                    )
+                    r_rand = r_sparse + 0.5 * gate * r_dense
                     gated.append(r_rand)
             reward_matrix = torch.stack(gated).reshape(-1, G, max_turns)
 
         return reward_matrix
+
+    def _process_reward_vector(
+        self,
+        signals: Optional[SignalBatch],
+        component: str = "composite",
+    ) -> torch.Tensor:
+        r = torch.zeros(self.config.max_turns, device=self.device)
+        if signals is None:
+            return r
+
+        for t in range(self.config.max_turns):
+            ig = signals.info_gain[t] if t < len(signals.info_gain) else 0.0
+            rel = signals.relevance[t] if t < len(signals.relevance) else 0.0
+            eff = signals.efficiency_cost[t] if t < len(signals.efficiency_cost) else 0.0
+            if component == "info_gain":
+                value = ig
+            else:
+                value = (
+                    self.config.router_signal_weights.get("info_gain", 0.6) * ig
+                    + self.config.router_signal_weights.get("relevance", 0.2) * rel
+                    + self.config.router_signal_weights.get("efficiency_cost", 0.2) * eff
+                )
+            r[t] = float(value)
+        return r
 
     def compute_grpo_loss(
         self,
@@ -577,14 +653,24 @@ class AdaptiveRewardTrainer:
                 all_trajectories.append(traj)
 
                 # v2: compute process signals
-                if self.config.use_router and self.signal_bank is not None:
+                if self.signal_bank is not None and (
+                    self.config.use_router
+                    or self.config.reward_mode in ("adaptive", "dense_igpo", "dense_fixed", "random_gate")
+                ):
                     signals = self.signal_bank.compute_signals(
                         step_count=T,
+                        trajectory=traj,
+                        task=task,
                     )
-                    if outcome > 0:
-                        self.reward_router.reliability.update("info_gain", 0.5, 1.0)
-                    else:
-                        self.reward_router.reliability.update("info_gain", 0.0, 0.0)
+                    if self.reward_router is not None:
+                        self.reward_router.reliability.update_many(
+                            {
+                                "info_gain": sum(signals.info_gain),
+                                "efficiency_cost": sum(signals.efficiency_cost),
+                                "relevance": sum(signals.relevance),
+                            },
+                            outcome,
+                        )
                     all_signals.append(signals)
 
                 if len(all_outcomes) % G == 1:
